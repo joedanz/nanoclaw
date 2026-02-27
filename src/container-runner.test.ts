@@ -262,15 +262,28 @@ describe('agent-runner version-based sync', () => {
     return promise;
   }
 
-  it('syncs runner when .base-version is missing', async () => {
+  /**
+   * Helper: configure mockedFs.existsSync for common path patterns.
+   * Reduces duplication across tests that only differ in which paths exist.
+   */
+  function mockExistsPaths(opts: {
+    keepLocal?: boolean;
+    runnerSrc?: boolean;
+    agentRunnerDir?: boolean;
+  }) {
+    const { keepLocal = false, runnerSrc = true, agentRunnerDir = true } = opts;
     mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
       const s = String(p);
-      if (s.includes('.keep-local-agent-runner')) return false;
-      if (s.includes('agent-runner-src')) return true;
+      if (s.includes('.keep-local-agent-runner')) return keepLocal;
+      if (s.includes('agent-runner-src')) return agentRunnerDir;
       if (s.endsWith(path.join('container', 'agent-runner', 'src')))
-        return true;
+        return runnerSrc;
       return false;
     });
+  }
+
+  it('syncs runner when .base-version is missing', async () => {
+    mockExistsPaths({});
     // .base-version doesn't exist → readFileSync throws ENOENT
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
       if (String(p).includes('.base-version')) {
@@ -300,14 +313,7 @@ describe('agent-runner version-based sync', () => {
   });
 
   it('syncs runner when .base-version is mismatched', async () => {
-    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
-      const s = String(p);
-      if (s.includes('.keep-local-agent-runner')) return false;
-      if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
-        return true;
-      return false;
-    });
+    mockExistsPaths({});
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
       if (String(p).includes('.base-version')) return 'old-version\n';
       return '';
@@ -324,14 +330,7 @@ describe('agent-runner version-based sync', () => {
   });
 
   it('skips sync when .keep-local-agent-runner exists', async () => {
-    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
-      const s = String(p);
-      if (s.includes('.keep-local-agent-runner')) return true;
-      if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
-        return true;
-      return false;
-    });
+    mockExistsPaths({ keepLocal: true });
 
     await runAndClose();
 
@@ -348,14 +347,7 @@ describe('agent-runner version-based sync', () => {
   });
 
   it('handles unreadable .base-version by forcing sync', async () => {
-    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
-      const s = String(p);
-      if (s.includes('.keep-local-agent-runner')) return false;
-      if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
-        return true;
-      return false;
-    });
+    mockExistsPaths({});
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
       if (String(p).includes('.base-version')) throw new Error('EACCES');
       return '';
@@ -368,14 +360,7 @@ describe('agent-runner version-based sync', () => {
   });
 
   it('skips sync when .base-version matches current version', async () => {
-    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
-      const s = String(p);
-      if (s.includes('.keep-local-agent-runner')) return false;
-      if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
-        return true;
-      return false;
-    });
+    mockExistsPaths({});
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
       if (String(p).includes('.base-version'))
         return 'evolving-personality-v1\n';
@@ -409,14 +394,7 @@ describe('agent-runner version-based sync', () => {
       callOrder.push('cpSync');
     });
 
-    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
-      const s = String(p);
-      if (s.includes('.keep-local-agent-runner')) return false;
-      if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
-        return true;
-      return false;
-    });
+    mockExistsPaths({});
     // No .base-version file → ENOENT triggers sync
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
       if (String(p).includes('.base-version')) {
@@ -435,5 +413,40 @@ describe('agent-runner version-based sync', () => {
     expect(rmIdx).toBeGreaterThan(-1);
     expect(cpIdx).toBeGreaterThan(-1);
     expect(rmIdx).toBeLessThan(cpIdx);
+  });
+
+  it('skips mount when cpSync fails during sync', async () => {
+    mockExistsPaths({});
+    mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
+      if (String(p).includes('.base-version')) {
+        const err = new Error('ENOENT') as NodeJS.ErrnoException;
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return '';
+    }) as typeof fs.readFileSync);
+    // cpSync throws → syncFailed = true
+    mockedFs.cpSync.mockImplementation(() => {
+      throw new Error('ENOSPC: no space left on device');
+    });
+    // index.ts doesn't exist → mount should be skipped
+    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('index.ts')) return false;
+      if (s.includes('.keep-local-agent-runner')) return false;
+      if (s.includes('agent-runner-src')) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
+        return true;
+      return false;
+    });
+
+    await runAndClose();
+
+    // Should have logged the error
+    const { logger } = await import('./logger.js');
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ group: 'test-group' }),
+      expect.stringContaining('Failed to sync agent-runner'),
+    );
   });
 });

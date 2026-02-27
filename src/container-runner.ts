@@ -137,23 +137,25 @@ function buildVolumeMounts(
   // Sync skills from container/skills/ into each group's .claude/skills/
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
+  const builtInSkillNames = new Set<string>();
   if (fs.existsSync(skillsSrc)) {
     for (const skillDir of fs.readdirSync(skillsSrc)) {
       const srcDir = path.join(skillsSrc, skillDir);
       if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
+      builtInSkillNames.add(skillDir);
+      try {
+        const dstDir = path.join(skillsDst, skillDir);
+        fs.cpSync(srcDir, dstDir, { recursive: true });
+      } catch (err) {
+        logger.error(
+          { group: group.folder, skill: skillDir, error: err },
+          'Failed to sync built-in skill',
+        );
+      }
     }
   }
 
   // Sync agent-created skills from group workspace into .claude/skills/
-  const builtInSkillNames = new Set(
-    fs.existsSync(skillsSrc)
-      ? fs
-          .readdirSync(skillsSrc)
-          .filter((d) => fs.statSync(path.join(skillsSrc, d)).isDirectory())
-      : [],
-  );
   syncAgentSkills(groupDir, skillsDst, builtInSkillNames, (msg) =>
     logger.warn({ group: group.folder }, msg),
   );

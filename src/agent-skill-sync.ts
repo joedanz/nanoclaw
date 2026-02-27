@@ -8,6 +8,10 @@ const MAX_SKILL_SIZE = 10_000; // 10KB per skill
 const MAX_TOTAL_SIZE = 50_000; // 50KB total
 const MAX_SKILL_COUNT = 20;
 
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 const DANGEROUS_PATTERNS = [
   'anthropic_api_key',
   'claude_code_oauth_token',
@@ -23,7 +27,7 @@ export function syncAgentSkills(
   groupDir: string,
   skillsDst: string,
   builtInSkillNames: Set<string>,
-  log?: (msg: string) => void,
+  log: (msg: string) => void = (m) => console.error(`[agent-skill-sync] ${m}`),
 ): void {
   const agentSkillsSrc = path.join(groupDir, 'skills');
   if (!fs.existsSync(agentSkillsSrc)) {
@@ -36,7 +40,7 @@ export function syncAgentSkills(
   let count = 0;
   const syncedSkills = new Set<string>();
 
-  for (const skillDir of fs.readdirSync(agentSkillsSrc)) {
+  for (const skillDir of fs.readdirSync(agentSkillsSrc).sort()) {
     if (!SKILL_NAME_PATTERN.test(skillDir)) continue;
     if (builtInSkillNames.has(skillDir)) continue;
 
@@ -47,22 +51,16 @@ export function syncAgentSkills(
       const stat = fs.lstatSync(srcDir);
       if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
     } catch (err) {
-      log?.(
-        `Skipping skill dir ${skillDir}: stat failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      log(`Skipping skill dir ${skillDir}: stat failed: ${errMsg(err)}`);
       continue;
     }
 
     const skillMdPath = path.join(srcDir, 'SKILL.md');
-    if (!fs.existsSync(skillMdPath)) continue;
-
     try {
       const stat = fs.lstatSync(skillMdPath);
       if (stat.isSymbolicLink() || !stat.isFile()) continue;
     } catch (err) {
-      log?.(
-        `Skipping skill ${skillDir}: SKILL.md stat failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      log(`Skipping skill ${skillDir}: SKILL.md stat failed: ${errMsg(err)}`);
       continue;
     }
 
@@ -70,42 +68,49 @@ export function syncAgentSkills(
     try {
       content = fs.readFileSync(skillMdPath, 'utf-8');
     } catch (err) {
-      log?.(
-        `Skipping skill ${skillDir}: read failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      log(`Skipping skill ${skillDir}: read failed: ${errMsg(err)}`);
       continue;
     }
 
     // Validate
-    if (!content.startsWith('---') || content.length > MAX_SKILL_SIZE) continue;
+    if (!content.startsWith('---')) {
+      log(`Skipping skill ${skillDir}: missing frontmatter`);
+      continue;
+    }
+    if (content.length > MAX_SKILL_SIZE) {
+      log(
+        `Skipping skill ${skillDir}: exceeds ${MAX_SKILL_SIZE} byte limit (${content.length} bytes)`,
+      );
+      continue;
+    }
     // Case-insensitive check to prevent bypass via mixed casing
     const contentLower = content.toLowerCase();
-    if (DANGEROUS_PATTERNS.some((p) => contentLower.includes(p))) continue;
+    if (DANGEROUS_PATTERNS.some((p) => contentLower.includes(p))) {
+      log(`Skipping skill ${skillDir}: contains dangerous pattern`);
+      continue;
+    }
 
+    if (
+      totalSize + content.length > MAX_TOTAL_SIZE ||
+      count + 1 > MAX_SKILL_COUNT
+    ) {
+      log(
+        `Skipping skill ${skillDir}: cap exceeded (total ${totalSize + content.length} bytes, count ${count + 1})`,
+      );
+      break;
+    }
     totalSize += content.length;
     count++;
-    if (totalSize > MAX_TOTAL_SIZE || count > MAX_SKILL_COUNT) break;
 
-    // Copy only SKILL.md (not entire directory). Allow updates via atomic write.
+    // Copy only SKILL.md (not entire directory).
     // Per-skill try-catch so one bad write doesn't kill sync for remaining skills.
     try {
       const dstDir = path.join(skillsDst, skillDir);
       fs.mkdirSync(dstDir, { recursive: true });
-      const dstPath = path.join(dstDir, 'SKILL.md');
-      const tmpPath = `${dstPath}.tmp`;
-      fs.writeFileSync(tmpPath, content);
-      fs.renameSync(tmpPath, dstPath);
+      fs.writeFileSync(path.join(dstDir, 'SKILL.md'), content);
       syncedSkills.add(skillDir);
     } catch (err) {
-      log?.(
-        `Failed to write skill ${skillDir}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      // Clean up partial .tmp file
-      try {
-        fs.unlinkSync(path.join(skillsDst, skillDir, 'SKILL.md.tmp'));
-      } catch {
-        /* best effort cleanup */
-      }
+      log(`Failed to write skill ${skillDir}: ${errMsg(err)}`);
       continue;
     }
   }
@@ -137,9 +142,7 @@ function pruneOrphanedSkills(
       fs.rmSync(path.join(skillsDst, dir), { recursive: true, force: true });
       log?.(`Pruned orphaned agent skill: ${dir}`);
     } catch (err) {
-      log?.(
-        `Failed to prune skill ${dir}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      log?.(`Failed to prune skill ${dir}: ${errMsg(err)}`);
     }
   }
 }

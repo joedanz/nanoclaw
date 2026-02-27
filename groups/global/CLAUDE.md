@@ -104,7 +104,7 @@ When you discover a reusable pattern or capability:
    ```
 2. Write clear instructions in the markdown body
 3. The skill will be available in your NEXT session (not this one — skills are synced when the container starts)
-4. Skill names must be lowercase letters, numbers, and hyphens only (e.g., `web-scraping`, `data-analysis`)
+4. Skill names must start with a lowercase letter or digit, followed by lowercase letters, digits, or hyphens (max 64 characters)
 5. Log the new skill in `evolution/learnings/live-notes.md`
 
 ### Reflection Prompt

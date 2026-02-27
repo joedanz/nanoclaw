@@ -276,12 +276,18 @@ describe('loadPersonality', () => {
     vi.clearAllMocks();
   });
 
-  it('returns undefined when file missing', () => {
-    mockedFs.existsSync.mockReturnValue(false);
+  it('returns undefined when file missing (ENOENT)', () => {
+    mockedFs.readFileSync.mockImplementation(() => {
+      const err = new Error('ENOENT') as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
+    });
 
     const result = loadPersonality(mockLog);
 
     expect(result).toBeUndefined();
+    // ENOENT should not log an error
+    expect(mockLog).not.toHaveBeenCalled();
   });
 
   it('truncates at newline boundary near 8KB', () => {
@@ -371,6 +377,19 @@ describe('loadPersonality', () => {
 describe('buildSystemPrompt', () => {
   it('returns undefined when neither source has content', () => {
     expect(buildSystemPrompt(undefined, undefined)).toBeUndefined();
+  });
+
+  it('returns undefined when both sources are empty strings', () => {
+    expect(buildSystemPrompt('', undefined)).toBeUndefined();
+  });
+
+  it('returns only personality when globalClaudeMd is empty string', () => {
+    const result = buildSystemPrompt('', 'personality');
+    expect(result).toEqual({
+      type: 'preset',
+      preset: 'claude_code',
+      append: 'personality',
+    });
   });
 
   it('returns preset with only globalClaudeMd when personality is undefined', () => {

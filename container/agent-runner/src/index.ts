@@ -230,6 +230,7 @@ interface ParsedMessage {
 
 function parseTranscript(content: string): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
+  let skippedLines = 0;
 
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
@@ -248,7 +249,12 @@ function parseTranscript(content: string): ParsedMessage[] {
         if (text) messages.push({ role: 'assistant', content: text });
       }
     } catch {
+      skippedLines++;
     }
+  }
+
+  if (skippedLines > 0) {
+    log(`parseTranscript: skipped ${skippedLines} unparseable lines`);
   }
 
   return messages;
@@ -289,7 +295,13 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
  */
 function shouldClose(): boolean {
   if (fs.existsSync(IPC_INPUT_CLOSE_SENTINEL)) {
-    try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        log(`Failed to remove close sentinel: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     return true;
   }
   return false;
@@ -392,10 +404,13 @@ async function runQuery(
   let messageCount = 0;
   let resultCount = 0;
 
-  // Load global CLAUDE.md as additional system context (shared across all groups)
-  const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
+  // Load global CLAUDE.md as additional system context (shared across all groups).
+  // Main accesses it via the project mount; non-main via the dedicated global mount.
+  const globalClaudeMdPath = containerInput.isMain
+    ? '/workspace/project/groups/global/CLAUDE.md'
+    : '/workspace/global/CLAUDE.md';
   let globalClaudeMd: string | undefined;
-  if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
+  if (fs.existsSync(globalClaudeMdPath)) {
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
   }
 
