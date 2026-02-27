@@ -73,7 +73,7 @@ function syncAgentRunner(
   // .keep-local-agent-runner escape hatch for intentionally customized groups.
   // IMPORTANT: Bump this version string whenever agent-runner source changes
   // that need to propagate to existing groups (e.g., new hooks, new tools).
-  const AGENT_RUNNER_BASE_VERSION = '2026-02-27';
+  const AGENT_RUNNER_BASE_VERSION = '2026-02-27b';
   const versionFile = path.join(groupAgentRunnerDir, '.base-version');
   const localOverride = path.join(
     groupAgentRunnerDir,
@@ -181,8 +181,9 @@ function snapshotPersonality(groupDir: string, groupFolder: string): void {
     fs.writeFileSync(hashFile, hash);
 
     // Cap at MAX_PERSONALITY_HISTORY files
-    const files = fs.readdirSync(historyDir)
-      .filter(f => f.endsWith('.md'))
+    const files = fs
+      .readdirSync(historyDir)
+      .filter((f) => f.endsWith('.md'))
       .sort();
     while (files.length > MAX_PERSONALITY_HISTORY) {
       const oldest = files.shift()!;

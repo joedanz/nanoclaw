@@ -18,7 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { query, HookCallback, PreCompactHookInput, PreToolUseHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
-import { createPendingReflectionHook, loadPersonality, buildSystemPrompt, stageSessionEndSummary, writeSessionMetrics } from './evolution.js';
+import { createPendingReflectionHook, loadPersonality, loadCrossGroupInsights, buildSystemPrompt, stageSessionEndSummary, writeSessionMetrics } from './evolution.js';
 
 interface ContainerInput {
   prompt: string;
@@ -423,6 +423,9 @@ async function runQuery(
   // Load evolved personality observations (if any)
   const personalityContent = loadPersonality(log);
 
+  // Load cross-group insights (written by weekly synthesis task)
+  const crossGroupInsights = loadCrossGroupInsights(log);
+
   // Discover additional directories mounted at /workspace/extra/*
   // These are passed to the SDK so their CLAUDE.md files are loaded automatically
   const extraDirs: string[] = [];
@@ -446,7 +449,7 @@ async function runQuery(
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      systemPrompt: buildSystemPrompt(globalClaudeMd, personalityContent),
+      systemPrompt: buildSystemPrompt(globalClaudeMd, personalityContent, crossGroupInsights),
       allowedTools: [
         'Bash',
         'Read', 'Write', 'Edit', 'Glob', 'Grep',

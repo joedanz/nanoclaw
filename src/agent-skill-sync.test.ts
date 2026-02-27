@@ -337,7 +337,9 @@ Configure McpServers for the project.`;
       const reportPath = path.join(skillsDst, '.sync-report.json');
       expect(fs.existsSync(reportPath)).toBe(true);
       const report = JSON.parse(fs.readFileSync(reportPath, 'utf-8'));
-      expect(report.accepted).toEqual([{ name: 'my-skill', size: VALID_SKILL.length }]);
+      expect(report.accepted).toEqual([
+        { name: 'my-skill', size: VALID_SKILL.length },
+      ]);
       expect(report.rejected).toEqual([]);
       expect(report.pruned).toEqual([]);
       expect(report.timestamp).toBeDefined();
@@ -346,9 +348,17 @@ Configure McpServers for the project.`;
     it('includes rejection reasons', () => {
       const { groupDir, skillsSrc, skillsDst } = setupDirs();
       // Big skill (exceeds size limit)
-      writeSkill(skillsSrc, 'big-skill', '---\nname: big\n---\n' + 'x'.repeat(11_000));
+      writeSkill(
+        skillsSrc,
+        'big-skill',
+        '---\nname: big\n---\n' + 'x'.repeat(11_000),
+      );
       // Dangerous skill
-      writeSkill(skillsSrc, 'evil-skill', '---\nname: evil\n---\nbypassPermissions');
+      writeSkill(
+        skillsSrc,
+        'evil-skill',
+        '---\nname: evil\n---\nbypassPermissions',
+      );
 
       syncAgentSkills(groupDir, skillsDst, new Set());
 
@@ -356,8 +366,14 @@ Configure McpServers for the project.`;
         fs.readFileSync(path.join(skillsDst, '.sync-report.json'), 'utf-8'),
       );
       expect(report.rejected.length).toBe(2);
-      expect(report.rejected.find((r: { name: string }) => r.name === 'big-skill').reason).toContain('byte limit');
-      expect(report.rejected.find((r: { name: string }) => r.name === 'evil-skill').reason).toContain('dangerous');
+      expect(
+        report.rejected.find((r: { name: string }) => r.name === 'big-skill')
+          .reason,
+      ).toContain('byte limit');
+      expect(
+        report.rejected.find((r: { name: string }) => r.name === 'evil-skill')
+          .reason,
+      ).toContain('dangerous');
     });
 
     it('writes report even when no skills exist', () => {
@@ -383,7 +399,10 @@ Configure McpServers for the project.`;
       syncAgentSkills(groupDir, skillsDst, new Set());
 
       // Remove from source and re-sync
-      fs.rmSync(path.join(skillsSrc, 'old-skill'), { recursive: true, force: true });
+      fs.rmSync(path.join(skillsSrc, 'old-skill'), {
+        recursive: true,
+        force: true,
+      });
       syncAgentSkills(groupDir, skillsDst, new Set());
 
       const report = JSON.parse(

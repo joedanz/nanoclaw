@@ -352,10 +352,7 @@ function writeFeedback(groupFolder: string, entry: FeedbackEntry): void {
       'Recorded user feedback',
     );
   } catch (err) {
-    logger.error(
-      { groupFolder, err },
-      'Failed to write feedback file',
-    );
+    logger.error({ groupFolder, err }, 'Failed to write feedback file');
   }
 }
 

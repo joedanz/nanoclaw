@@ -101,7 +101,10 @@ export function syncAgentSkills(
       content = fs.readFileSync(skillMdPath, 'utf-8');
     } catch (err) {
       log(`Skipping skill ${skillDir}: read failed: ${errMsg(err)}`);
-      report.rejected.push({ name: skillDir, reason: `read failed: ${errMsg(err)}` });
+      report.rejected.push({
+        name: skillDir,
+        reason: `read failed: ${errMsg(err)}`,
+      });
       continue;
     }
 
@@ -115,7 +118,11 @@ export function syncAgentSkills(
       log(
         `Skipping skill ${skillDir}: exceeds ${MAX_SKILL_SIZE} byte limit (${content.length} bytes)`,
       );
-      report.rejected.push({ name: skillDir, size: content.length, reason: `exceeds ${MAX_SKILL_SIZE} byte limit` });
+      report.rejected.push({
+        name: skillDir,
+        size: content.length,
+        reason: `exceeds ${MAX_SKILL_SIZE} byte limit`,
+      });
       continue;
     }
     // Case-insensitive check to prevent bypass via mixed casing
@@ -124,7 +131,10 @@ export function syncAgentSkills(
       .toLowerCase();
     if (DANGEROUS_PATTERNS.some((p) => contentLower.includes(p))) {
       log(`Skipping skill ${skillDir}: contains dangerous pattern`);
-      report.rejected.push({ name: skillDir, reason: 'contains dangerous pattern' });
+      report.rejected.push({
+        name: skillDir,
+        reason: 'contains dangerous pattern',
+      });
       continue;
     }
 
@@ -135,7 +145,11 @@ export function syncAgentSkills(
       log(
         `Skipping skill ${skillDir}: cap exceeded (total ${totalSize + content.length} bytes, count ${count + 1})`,
       );
-      report.rejected.push({ name: skillDir, size: content.length, reason: 'cap exceeded' });
+      report.rejected.push({
+        name: skillDir,
+        size: content.length,
+        reason: 'cap exceeded',
+      });
       break;
     }
     totalSize += content.length;
@@ -151,7 +165,10 @@ export function syncAgentSkills(
       report.accepted.push({ name: skillDir, size: content.length });
     } catch (err) {
       log(`Failed to write skill ${skillDir}: ${errMsg(err)}`);
-      report.rejected.push({ name: skillDir, reason: `write failed: ${errMsg(err)}` });
+      report.rejected.push({
+        name: skillDir,
+        reason: `write failed: ${errMsg(err)}`,
+      });
       continue;
     }
   }

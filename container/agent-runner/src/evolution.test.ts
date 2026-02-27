@@ -24,7 +24,7 @@ vi.mock('fs', async () => {
 const mockedFs = vi.mocked(fs);
 
 // Import after mocks are set up
-const { createPendingReflectionHook, loadPersonality, buildSystemPrompt, stageSessionEndSummary, writeSessionMetrics } =
+const { createPendingReflectionHook, loadPersonality, loadCrossGroupInsights, buildSystemPrompt, stageSessionEndSummary, writeSessionMetrics, updateConversationIndex } =
   await import('./evolution.js');
 
 describe('createPendingReflectionHook', () => {
@@ -468,6 +468,39 @@ describe('buildSystemPrompt', () => {
       append: 'global instructions\n\n---\n\npersonality content',
     });
   });
+
+  it('includes cross-group insights with preamble when provided', () => {
+    const result = buildSystemPrompt(
+      'global instructions',
+      'personality content',
+      'Common pattern: users prefer concise responses',
+    );
+    expect(result).toBeDefined();
+    expect(result!.append).toContain('global instructions');
+    expect(result!.append).toContain('personality content');
+    expect(result!.append).toContain('Cross-Group Insights');
+    expect(result!.append).toContain('Common pattern: users prefer concise responses');
+  });
+
+  it('ignores empty cross-group insights', () => {
+    const result = buildSystemPrompt(
+      'global instructions',
+      'personality content',
+      '   ',
+    );
+    expect(result).toEqual({
+      type: 'preset',
+      preset: 'claude_code',
+      append: 'global instructions\n\n---\n\npersonality content',
+    });
+  });
+
+  it('works with only cross-group insights', () => {
+    const result = buildSystemPrompt(undefined, undefined, 'insights only');
+    expect(result).toBeDefined();
+    expect(result!.append).toContain('Cross-Group Insights');
+    expect(result!.append).toContain('insights only');
+  });
 });
 
 describe('stageSessionEndSummary', () => {
@@ -698,5 +731,154 @@ describe('writeSessionMetrics', () => {
     expect(mockLog).toHaveBeenCalledWith(
       expect.stringContaining('Failed to write session metrics'),
     );
+  });
+});
+
+describe('loadCrossGroupInsights', () => {
+  const mockLog = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns content when file exists', () => {
+    mockedFs.readFileSync.mockReturnValue('Common pattern: concise responses');
+
+    const result = loadCrossGroupInsights(mockLog);
+    expect(result).toBe('Common pattern: concise responses');
+  });
+
+  it('returns undefined when file does not exist', () => {
+    mockedFs.readFileSync.mockImplementation(() => {
+      const err = new Error('ENOENT') as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
+    });
+
+    const result = loadCrossGroupInsights(mockLog);
+    expect(result).toBeUndefined();
+    expect(mockLog).not.toHaveBeenCalled();
+  });
+
+  it('returns undefined when file is empty', () => {
+    mockedFs.readFileSync.mockReturnValue('   \n  ');
+
+    const result = loadCrossGroupInsights(mockLog);
+    expect(result).toBeUndefined();
+  });
+
+  it('logs and returns undefined on read error', () => {
+    mockedFs.readFileSync.mockImplementation(() => {
+      throw new Error('EACCES: permission denied');
+    });
+
+    const result = loadCrossGroupInsights(mockLog);
+    expect(result).toBeUndefined();
+    expect(mockLog).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to read cross-group insights'),
+    );
+  });
+});
+
+describe('updateConversationIndex', () => {
+  const mockLog = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedFs.writeFileSync.mockImplementation(vi.fn());
+    mockedFs.existsSync.mockReturnValue(false);
+  });
+
+  it('creates index from conversation files', () => {
+    mockedFs.existsSync.mockReturnValue(true);
+    mockedFs.readdirSync.mockReturnValue([
+      '2026-02-20-sales-review.md',
+      '2026-02-25-bug-fix.md',
+      'index.json',
+    ] as unknown as fs.Dirent[]);
+    mockedFs.statSync.mockReturnValue({
+      isFile: () => true,
+      mtimeMs: Date.now(),
+    } as unknown as fs.Stats);
+    mockedFs.readFileSync.mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('sales-review')) return 'Discussion about Q4 sales figures and targets';
+      if (s.includes('bug-fix')) return 'Fixed the login timeout issue in production';
+      return '';
+    });
+
+    updateConversationIndex(mockLog);
+
+    expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
+      '/workspace/group/conversations/index.json',
+      expect.stringContaining('"entries"'),
+    );
+    const writeCall = mockedFs.writeFileSync.mock.calls[0];
+    const parsed = JSON.parse(writeCall![1] as string);
+    expect(parsed.entries).toHaveLength(2); // index.json is filtered out
+    expect(parsed.entries[0].file).toBe('2026-02-25-bug-fix.md'); // newer first
+    expect(parsed.entries[1].file).toBe('2026-02-20-sales-review.md');
+    expect(parsed.lastUpdated).toBeDefined();
+  });
+
+  it('caps at 500 entries', () => {
+    mockedFs.existsSync.mockReturnValue(true);
+    const files = Array.from({ length: 600 }, (_, i) => {
+      const d = String(i).padStart(3, '0');
+      return `2026-01-${d}-conversation.md`;
+    });
+    mockedFs.readdirSync.mockReturnValue(files as unknown as fs.Dirent[]);
+    mockedFs.statSync.mockReturnValue({
+      isFile: () => true,
+      mtimeMs: Date.now(),
+    } as unknown as fs.Stats);
+    mockedFs.readFileSync.mockReturnValue('some content');
+
+    updateConversationIndex(mockLog);
+
+    const writeCall = mockedFs.writeFileSync.mock.calls[0];
+    const parsed = JSON.parse(writeCall![1] as string);
+    expect(parsed.entries).toHaveLength(500);
+  });
+
+  it('handles empty conversations directory', () => {
+    mockedFs.existsSync.mockReturnValue(true);
+    mockedFs.readdirSync.mockReturnValue([] as unknown as fs.Dirent[]);
+
+    updateConversationIndex(mockLog);
+
+    const writeCall = mockedFs.writeFileSync.mock.calls[0];
+    const parsed = JSON.parse(writeCall![1] as string);
+    expect(parsed.entries).toHaveLength(0);
+  });
+
+  it('skips when conversations directory does not exist', () => {
+    mockedFs.existsSync.mockReturnValue(false);
+
+    updateConversationIndex(mockLog);
+
+    expect(mockedFs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('extracts date from filename or falls back to mtime', () => {
+    mockedFs.existsSync.mockReturnValue(true);
+    mockedFs.readdirSync.mockReturnValue([
+      '2026-02-20-dated.md',
+      'undated-conversation.md',
+    ] as unknown as fs.Dirent[]);
+    mockedFs.statSync.mockReturnValue({
+      isFile: () => true,
+      mtimeMs: new Date('2026-03-01').getTime(),
+    } as unknown as fs.Stats);
+    mockedFs.readFileSync.mockReturnValue('content here');
+
+    updateConversationIndex(mockLog);
+
+    const writeCall = mockedFs.writeFileSync.mock.calls[0];
+    const parsed = JSON.parse(writeCall![1] as string);
+    const datedEntry = parsed.entries.find((e: { file: string }) => e.file === '2026-02-20-dated.md');
+    const undatedEntry = parsed.entries.find((e: { file: string }) => e.file === 'undated-conversation.md');
+    expect(datedEntry.date).toBe('2026-02-20');
+    expect(undatedEntry.date).toBe('2026-03-01');
   });
 });

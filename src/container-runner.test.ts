@@ -487,7 +487,8 @@ describe('personality versioning', () => {
     mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
       const s = String(p);
       if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
+        return true;
       return false;
     });
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
@@ -518,12 +519,16 @@ describe('personality versioning', () => {
 
   it('no-op when personality.md has not changed (hash match)', async () => {
     const crypto = await import('crypto');
-    const expectedHash = crypto.createHash('sha256').update('User likes jokes').digest('hex');
+    const expectedHash = crypto
+      .createHash('sha256')
+      .update('User likes jokes')
+      .digest('hex');
 
     mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
       const s = String(p);
       if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
+        return true;
       return false;
     });
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
@@ -547,7 +552,8 @@ describe('personality versioning', () => {
     mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
       const s = String(p);
       if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
+        return true;
       return false;
     });
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
@@ -572,8 +578,9 @@ describe('personality versioning', () => {
   });
 
   it('caps history at 30 files', async () => {
-    const historyFiles = Array.from({ length: 35 }, (_, i) =>
-      `2026-02-${String(i + 1).padStart(2, '0')}T00-00-00-000Z.md`,
+    const historyFiles = Array.from(
+      { length: 35 },
+      (_, i) => `2026-02-${String(i + 1).padStart(2, '0')}T00-00-00-000Z.md`,
     );
 
     const deletedHistoryFiles: string[] = [];
@@ -581,7 +588,8 @@ describe('personality versioning', () => {
     mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
       const s = String(p);
       if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
+        return true;
       return false;
     });
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
@@ -591,11 +599,13 @@ describe('personality versioning', () => {
       if (s.includes('.personality-hash')) return 'old-hash';
       return '';
     }) as typeof fs.readFileSync);
-    (mockedFs.readdirSync as ReturnType<typeof vi.fn>).mockImplementation((p: fs.PathLike) => {
-      const s = String(p);
-      if (s.includes('evolution/history')) return historyFiles;
-      return [];
-    });
+    (mockedFs.readdirSync as ReturnType<typeof vi.fn>).mockImplementation(
+      (p: fs.PathLike) => {
+        const s = String(p);
+        if (s.includes('evolution/history')) return historyFiles;
+        return [];
+      },
+    );
     mockedFs.unlinkSync = vi.fn(((p: fs.PathLike) => {
       const s = String(p);
       if (s.includes('evolution/history/')) {

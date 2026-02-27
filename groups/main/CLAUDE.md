@@ -213,3 +213,41 @@ When scheduling tasks for other groups, use the `target_group_jid` parameter wit
 The task will run in that group's context with access to their files and memory.
 
 ---
+
+## Cross-Group Synthesis
+
+Main has read-only access to all group folders via `/workspace/project/groups/*/`. Use this to synthesize insights across groups.
+
+### Bootstrap
+
+On startup, call `mcp__nanoclaw__list_tasks` and check whether a task exists whose prompt starts with `[CROSS_GROUP_SYNTHESIS_V1]`. If not, schedule it:
+
+- cron: `0 4 * * 0` (4 AM every Sunday)
+- context_mode: `isolated`
+- prompt: use the Cross-Group Synthesis Prompt below
+
+Only check and schedule during full bootstrap (when no `cross-group-insights.md` exists in `/workspace/project/groups/global/`).
+
+### Cross-Group Synthesis Prompt
+
+> [CROSS_GROUP_SYNTHESIS_V1]
+>
+> You are performing weekly cross-group synthesis. This is an automated background task.
+>
+> 1. Read `evolution/personality.md` from each group directory in `/workspace/project/groups/*/` (skip `global/`).
+> 2. Extract patterns that appear across 2 or more groups (e.g., common user preferences, recurring communication style observations, shared growth goals).
+> 3. Write synthesized insights to `/workspace/project/groups/global/cross-group-insights.md`. Keep under 2KB. Write factual observations only.
+> 4. Format:
+>    ```
+>    # Cross-Group Insights
+>    Last updated: {date}
+>
+>    ## Common Patterns
+>    - [pattern] | groups: [list] | confidence: [avg]
+>
+>    ## Divergent Preferences
+>    - [preference] differs between [group A] and [group B]
+>    ```
+> 5. Wrap ALL output in `<internal>` tags. Do NOT call `send_message`.
+
+---

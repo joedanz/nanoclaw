@@ -40,12 +40,14 @@ Files you create are saved in `/workspace/group/`. Use this for notes, research,
 
 ## Memory
 
-The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.
+The `conversations/` folder contains searchable history of past conversations. When searching past conversations, check `conversations/index.json` first to find relevant files by date and summary, then read specific files. The index is updated automatically during daily reflection.
 
 When you learn something important:
 - Create files for structured data (e.g., `customers.md`, `preferences.md`)
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
+
+If `cross-group-insights.md` exists at `/workspace/global/cross-group-insights.md`, it contains patterns observed across all conversation groups. These insights are loaded into your context automatically.
 
 ## Message Formatting
 
@@ -155,5 +157,6 @@ The daily reflection task uses this prompt:
 >
 > 6. Review skills in `skills/` — if any skill was used and could be improved based on recent conversations, update its SKILL.md. Check `skills/.sync-report.json` to see which skills were accepted/rejected during the last sync.
 > 7. Read `evolution/metrics/*.jsonl` for session performance data. Note patterns (e.g., "sessions are getting shorter", "error rate increasing", "more queries per session").
-> 8. Delete processed files from `evolution/pending/` and `evolution/feedback/`. Clear processed entries from `evolution/learnings/live-notes.md`.
-> 9. Wrap ALL output in `<internal>` tags. Do NOT call `send_message` in reflection tasks.
+> 8. Update `conversations/index.json` with summaries of any new conversation files. Each entry has `file`, `date`, and `summary` (first 200 chars). Cap at 500 entries, newest first.
+> 9. Delete processed files from `evolution/pending/` and `evolution/feedback/`. Clear processed entries from `evolution/learnings/live-notes.md`.
+> 10. Wrap ALL output in `<internal>` tags. Do NOT call `send_message` in reflection tasks.

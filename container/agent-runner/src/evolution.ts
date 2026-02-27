@@ -209,18 +209,27 @@ export function writeSessionMetrics(
   }
 }
 
+const CROSS_GROUP_PREAMBLE = `# Cross-Group Insights (patterns observed across all contexts)
+These are synthesized observations from multiple conversation groups.
+They complement your per-group personality observations.`;
+
 /**
- * Build the system prompt append string from optional global CLAUDE.md
- * and optional personality content. Returns the SDK systemPrompt object
- * or undefined if neither source has content.
+ * Build the system prompt append string from optional global CLAUDE.md,
+ * optional personality content, and optional cross-group insights.
+ * Returns the SDK systemPrompt object or undefined if no source has content.
  */
 export function buildSystemPrompt(
   globalClaudeMd: string | undefined,
   personalityContent: string | undefined,
+  crossGroupInsights?: string | undefined,
 ):
   | { type: 'preset'; preset: 'claude_code'; append: string }
   | undefined {
-  const systemAppend = [globalClaudeMd, personalityContent]
+  const insightsWithPreamble = crossGroupInsights?.trim()
+    ? CROSS_GROUP_PREAMBLE + '\n' + crossGroupInsights.trim()
+    : undefined;
+
+  const systemAppend = [globalClaudeMd, personalityContent, insightsWithPreamble]
     .filter(Boolean)
     .join('\n\n---\n\n');
   return systemAppend
@@ -230,6 +239,90 @@ export function buildSystemPrompt(
         append: systemAppend,
       }
     : undefined;
+}
+
+/**
+ * Load cross-group insights from /workspace/global/cross-group-insights.md.
+ * Written by the weekly cross-group synthesis task (runs in main's container).
+ * Returns undefined if file doesn't exist or is empty.
+ */
+export function loadCrossGroupInsights(
+  log: (msg: string) => void,
+): string | undefined {
+  const insightsPath = '/workspace/global/cross-group-insights.md';
+  try {
+    const content = fs.readFileSync(insightsPath, 'utf-8');
+    if (!content.trim()) return undefined;
+    return content;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    log(
+      `Failed to read cross-group insights: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return undefined;
+  }
+}
+
+const MAX_INDEX_ENTRIES = 500;
+
+/**
+ * Update conversations/index.json with summaries of conversation files.
+ * Called by the daily reflection task to keep the index current.
+ * Creates the index if it doesn't exist, caps at MAX_INDEX_ENTRIES.
+ */
+export function updateConversationIndex(
+  log: (msg: string) => void,
+): void {
+  const conversationsDir = '/workspace/group/conversations';
+  const indexPath = path.join(conversationsDir, 'index.json');
+
+  try {
+    if (!fs.existsSync(conversationsDir)) return;
+
+    const files = fs.readdirSync(conversationsDir)
+      .filter(f => f !== 'index.json' && !f.startsWith('.'));
+
+    const entries: Array<{ file: string; date: string; summary: string }> = [];
+    for (const file of files) {
+      const filePath = path.join(conversationsDir, file);
+      try {
+        const stat = fs.statSync(filePath);
+        if (!stat.isFile()) continue;
+
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const dateMatch = file.match(/^(\d{4}-\d{2}-\d{2})/);
+        const date = dateMatch
+          ? dateMatch[1]
+          : new Date(stat.mtimeMs).toISOString().split('T')[0];
+
+        entries.push({
+          file,
+          date,
+          summary: content.slice(0, 200).replace(/\n/g, ' ').trim(),
+        });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          log(`Failed to index conversation file ${file}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+
+    // Sort by date descending, cap at MAX_INDEX_ENTRIES
+    entries.sort((a, b) => b.date.localeCompare(a.date));
+    const capped = entries.slice(0, MAX_INDEX_ENTRIES);
+
+    fs.writeFileSync(
+      indexPath,
+      JSON.stringify({
+        lastUpdated: new Date().toISOString(),
+        entries: capped,
+      }, null, 2),
+    );
+
+    log(`Updated conversation index: ${capped.length} entries`);
+  } catch (err) {
+    log(`Failed to update conversation index: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 const GOALS_PREAMBLE = `# Current Growth Goals (self-identified areas for improvement)
