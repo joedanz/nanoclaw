@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { query, HookCallback, PreCompactHookInput, PreToolUseHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import { createPendingReflectionHook, loadPersonality, buildSystemPrompt } from './evolution.js';
 
 interface ContainerInput {
   prompt: string;
@@ -398,6 +399,9 @@ async function runQuery(
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
   }
 
+  // Load evolved personality observations (if any)
+  const personalityContent = loadPersonality(log);
+
   // Discover additional directories mounted at /workspace/extra/*
   // These are passed to the SDK so their CLAUDE.md files are loaded automatically
   const extraDirs: string[] = [];
@@ -421,9 +425,7 @@ async function runQuery(
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
-        : undefined,
+      systemPrompt: buildSystemPrompt(globalClaudeMd, personalityContent),
       allowedTools: [
         'Bash',
         'Read', 'Write', 'Edit', 'Glob', 'Grep',
@@ -450,7 +452,10 @@ async function runQuery(
         },
       },
       hooks: {
-        PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
+        PreCompact: [
+          { hooks: [createPreCompactHook(containerInput.assistantName)] },
+          { hooks: [createPendingReflectionHook(containerInput.isScheduledTask ?? false, log)] },
+        ],
         PreToolUse: [{ matcher: 'Bash', hooks: [createSanitizeBashHook()] }],
       },
     }

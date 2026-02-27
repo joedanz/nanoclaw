@@ -24,6 +24,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { validateAdditionalMounts } from './mount-security.js';
+import { syncAgentSkills } from './agent-skill-sync.js';
 import { RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -144,6 +145,18 @@ function buildVolumeMounts(
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
+
+  // Sync agent-created skills from group workspace into .claude/skills/
+  const builtInSkillNames = new Set(
+    fs.existsSync(skillsSrc)
+      ? fs.readdirSync(skillsSrc).filter(
+          (d) => fs.statSync(path.join(skillsSrc, d)).isDirectory(),
+        )
+      : [],
+  );
+  syncAgentSkills(groupDir, skillsDst, builtInSkillNames, (msg) =>
+    logger.warn({ group: group.folder }, msg),
+  );
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
@@ -177,8 +190,51 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  // Version-based sync: update runner when base version changes.
+  // .keep-local-agent-runner escape hatch for intentionally customized groups.
+  const AGENT_RUNNER_BASE_VERSION = 'evolving-personality-v1';
+  const versionFile = path.join(groupAgentRunnerDir, '.base-version');
+  const localOverride = path.join(groupAgentRunnerDir, '.keep-local-agent-runner');
+
+  let currentVersion: string | null = null;
+  try {
+    currentVersion = fs.readFileSync(versionFile, 'utf-8').trim();
+  } catch (err) {
+    if (
+      (err as NodeJS.ErrnoException).code !== 'ENOENT'
+    ) {
+      logger.warn(
+        { group: group.folder, versionFile, error: err },
+        'Failed to read agent-runner base version, will re-sync',
+      );
+    }
+    currentVersion = null;
+  }
+
+  const shouldSync =
+    !fs.existsSync(groupAgentRunnerDir) ||
+    currentVersion !== AGENT_RUNNER_BASE_VERSION;
+
+  if (
+    shouldSync &&
+    !fs.existsSync(localOverride) &&
+    fs.existsSync(agentRunnerSrc)
+  ) {
+    // Full refresh to prevent stale deleted/renamed files from lingering
+    try {
+      fs.rmSync(groupAgentRunnerDir, { recursive: true, force: true });
+      fs.mkdirSync(groupAgentRunnerDir, { recursive: true });
+      fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, {
+        recursive: true,
+        force: true,
+      });
+      fs.writeFileSync(versionFile, `${AGENT_RUNNER_BASE_VERSION}\n`);
+    } catch (err) {
+      logger.error(
+        { group: group.folder, error: err },
+        'Failed to sync agent-runner source; container may use stale code',
+      );
+    }
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,

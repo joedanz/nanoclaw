@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import path from 'path';
 import { PassThrough } from 'stream';
 
 // Sentinel markers must match container-runner.ts
@@ -40,7 +41,11 @@ vi.mock('fs', async () => {
       readFileSync: vi.fn(() => ''),
       readdirSync: vi.fn(() => []),
       statSync: vi.fn(() => ({ isDirectory: () => false })),
+      lstatSync: vi.fn(() => ({ isDirectory: () => true, isSymbolicLink: () => false, isFile: () => true })),
       copyFileSync: vi.fn(),
+      cpSync: vi.fn(),
+      rmSync: vi.fn(),
+      renameSync: vi.fn(),
     },
   };
 });
@@ -48,6 +53,11 @@ vi.mock('fs', async () => {
 // Mock mount-security
 vi.mock('./mount-security.js', () => ({
   validateAdditionalMounts: vi.fn(() => []),
+}));
+
+// Mock agent-skill-sync
+vi.mock('./agent-skill-sync.js', () => ({
+  syncAgentSkills: vi.fn(),
 }));
 
 // Create a controllable fake ChildProcess
@@ -85,8 +95,11 @@ vi.mock('child_process', async () => {
   };
 });
 
+import fs from 'fs';
 import { runContainerAgent, ContainerOutput } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
+
+const mockedFs = vi.mocked(fs);
 
 const testGroup: RegisteredGroup = {
   name: 'Test Group',
@@ -205,5 +218,204 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+});
+
+/**
+ * Tests for version-based agent-runner sync in buildVolumeMounts.
+ *
+ * These tests exercise the sync logic indirectly through runContainerAgent,
+ * which calls buildVolumeMounts internally. We verify by checking which
+ * fs operations were performed.
+ */
+describe('agent-runner version-based sync', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.clearAllMocks();
+
+    // Default: most paths don't exist
+    mockedFs.existsSync.mockImplementation(() => false);
+    (mockedFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([]);
+    mockedFs.statSync.mockReturnValue({ isDirectory: () => true } as fs.Stats);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Helper to run container and immediately close it
+  async function runAndClose() {
+    const promise = runContainerAgent(testGroup, testInput, () => {});
+    // Let it start, then close immediately
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.stdout.push(
+      `${OUTPUT_START_MARKER}\n${JSON.stringify({ status: 'success', result: null })}\n${OUTPUT_END_MARKER}\n`,
+    );
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    return promise;
+  }
+
+  it('syncs runner when .base-version is missing', async () => {
+    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('.keep-local-agent-runner')) return false;
+      if (s.includes('agent-runner-src')) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      return false;
+    });
+    // .base-version doesn't exist → readFileSync throws ENOENT
+    mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
+      if (String(p).includes('.base-version')) {
+        const err = new Error('ENOENT') as NodeJS.ErrnoException;
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return '';
+    }) as typeof fs.readFileSync);
+
+    await runAndClose();
+
+    // Should have performed rmSync + cpSync + writeFileSync for version
+    expect(mockedFs.rmSync).toHaveBeenCalledWith(
+      expect.stringContaining('agent-runner-src'),
+      expect.objectContaining({ recursive: true, force: true }),
+    );
+    expect(mockedFs.cpSync).toHaveBeenCalledWith(
+      expect.stringContaining(path.join('container', 'agent-runner', 'src')),
+      expect.stringContaining('agent-runner-src'),
+      expect.objectContaining({ recursive: true, force: true }),
+    );
+    expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('.base-version'),
+      expect.stringContaining('evolving-personality-v1'),
+    );
+  });
+
+  it('syncs runner when .base-version is mismatched', async () => {
+    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('.keep-local-agent-runner')) return false;
+      if (s.includes('agent-runner-src')) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      return false;
+    });
+    mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
+      if (String(p).includes('.base-version')) return 'old-version\n';
+      return '';
+    }) as typeof fs.readFileSync);
+
+    await runAndClose();
+
+    // Version mismatch → should sync
+    expect(mockedFs.rmSync).toHaveBeenCalledWith(
+      expect.stringContaining('agent-runner-src'),
+      expect.objectContaining({ recursive: true }),
+    );
+    expect(mockedFs.cpSync).toHaveBeenCalled();
+  });
+
+  it('skips sync when .keep-local-agent-runner exists', async () => {
+    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('.keep-local-agent-runner')) return true;
+      if (s.includes('agent-runner-src')) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      return false;
+    });
+
+    await runAndClose();
+
+    // Should NOT have synced
+    expect(mockedFs.rmSync).not.toHaveBeenCalledWith(
+      expect.stringContaining('agent-runner-src'),
+      expect.anything(),
+    );
+    expect(mockedFs.cpSync).not.toHaveBeenCalledWith(
+      expect.stringContaining(path.join('container', 'agent-runner', 'src')),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('handles unreadable .base-version by forcing sync', async () => {
+    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('.keep-local-agent-runner')) return false;
+      if (s.includes('agent-runner-src')) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      return false;
+    });
+    mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
+      if (String(p).includes('.base-version')) throw new Error('EACCES');
+      return '';
+    }) as typeof fs.readFileSync);
+
+    await runAndClose();
+
+    // Unreadable version → currentVersion is null → shouldSync is true
+    expect(mockedFs.cpSync).toHaveBeenCalled();
+  });
+
+  it('skips sync when .base-version matches current version', async () => {
+    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('.keep-local-agent-runner')) return false;
+      if (s.includes('agent-runner-src')) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      return false;
+    });
+    mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
+      if (String(p).includes('.base-version')) return 'evolving-personality-v1\n';
+      return '';
+    }) as typeof fs.readFileSync);
+
+    await runAndClose();
+
+    // Version matches → should NOT have synced
+    expect(mockedFs.rmSync).not.toHaveBeenCalledWith(
+      expect.stringContaining('agent-runner-src'),
+      expect.anything(),
+    );
+    expect(mockedFs.cpSync).not.toHaveBeenCalledWith(
+      expect.stringContaining(path.join('container', 'agent-runner', 'src')),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('full refresh removes stale files before copy', async () => {
+    const callOrder: string[] = [];
+    mockedFs.rmSync.mockImplementation(() => { callOrder.push('rmSync'); });
+    mockedFs.mkdirSync.mockImplementation(() => { callOrder.push('mkdirSync'); return undefined; });
+    mockedFs.cpSync.mockImplementation(() => { callOrder.push('cpSync'); });
+
+    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('.keep-local-agent-runner')) return false;
+      if (s.includes('agent-runner-src')) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      return false;
+    });
+    // No .base-version file → ENOENT triggers sync
+    mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
+      if (String(p).includes('.base-version')) {
+        const err = new Error('ENOENT') as NodeJS.ErrnoException;
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return '';
+    }) as typeof fs.readFileSync);
+
+    await runAndClose();
+
+    // rmSync should happen before cpSync for the agent-runner-src directory
+    const rmIdx = callOrder.indexOf('rmSync');
+    const cpIdx = callOrder.indexOf('cpSync');
+    expect(rmIdx).toBeGreaterThan(-1);
+    expect(cpIdx).toBeGreaterThan(-1);
+    expect(rmIdx).toBeLessThan(cpIdx);
   });
 });
