@@ -18,7 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { query, HookCallback, PreCompactHookInput, PreToolUseHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
-import { createPendingReflectionHook, loadPersonality, buildSystemPrompt } from './evolution.js';
+import { createPendingReflectionHook, loadPersonality, buildSystemPrompt, stageSessionEndSummary } from './evolution.js';
 
 interface ContainerInput {
   prompt: string;
@@ -569,11 +569,16 @@ async function main(): Promise<void> {
     prompt += '\n' + pending.join('\n');
   }
 
+  // Track session metrics for evolution
+  const sessionStartTime = Date.now();
+  let totalQueryCount = 0;
+
   // Query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
   try {
     while (true) {
-      log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
+      totalQueryCount++;
+      log(`Starting query #${totalQueryCount} (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
 
       const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
       if (queryResult.newSessionId) {
@@ -588,6 +593,12 @@ async function main(): Promise<void> {
       // idle timer and cause a 30-min delay before the next _close).
       if (queryResult.closedDuringQuery) {
         log('Close sentinel consumed during query, exiting');
+        stageSessionEndSummary({
+          isScheduledTask: containerInput.isScheduledTask ?? false,
+          messageCount: totalQueryCount,
+          firstPrompt: containerInput.prompt,
+          startTime: sessionStartTime,
+        }, log);
         break;
       }
 
@@ -600,6 +611,12 @@ async function main(): Promise<void> {
       const nextMessage = await waitForIpcMessage();
       if (nextMessage === null) {
         log('Close sentinel received, exiting');
+        stageSessionEndSummary({
+          isScheduledTask: containerInput.isScheduledTask ?? false,
+          messageCount: totalQueryCount,
+          firstPrompt: containerInput.prompt,
+          startTime: sessionStartTime,
+        }, log);
         break;
       }
 

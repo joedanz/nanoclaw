@@ -23,7 +23,7 @@ vi.mock('fs', async () => {
 const mockedFs = vi.mocked(fs);
 
 // Import after mocks are set up
-const { createPendingReflectionHook, loadPersonality, buildSystemPrompt } =
+const { createPendingReflectionHook, loadPersonality, buildSystemPrompt, stageSessionEndSummary } =
   await import('./evolution.js');
 
 describe('createPendingReflectionHook', () => {
@@ -420,5 +420,146 @@ describe('buildSystemPrompt', () => {
       preset: 'claude_code',
       append: 'global instructions\n\n---\n\npersonality content',
     });
+  });
+});
+
+describe('stageSessionEndSummary', () => {
+  const mockLog = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Reset implementations that may have been set to throw by prior tests
+    mockedFs.writeFileSync.mockImplementation(vi.fn());
+    mockedFs.mkdirSync.mockImplementation(vi.fn());
+    mockedFs.unlinkSync.mockImplementation(vi.fn());
+  });
+
+  it('stages summary correctly on session end', () => {
+    mockedFs.readdirSync.mockReturnValue([] as unknown as fs.Dirent[]);
+
+    stageSessionEndSummary({
+      isScheduledTask: false,
+      messageCount: 5,
+      firstPrompt: 'Hello world',
+      startTime: Date.now() - 10000,
+    }, mockLog);
+
+    expect(mockedFs.mkdirSync).toHaveBeenCalledWith(
+      '/workspace/group/evolution/pending',
+      { recursive: true },
+    );
+    expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringMatching(/\/workspace\/group\/evolution\/pending\/\d+-session-end-\w+\.json$/),
+      expect.stringContaining('"type": "session-end"'),
+    );
+    expect(mockLog).toHaveBeenCalledWith('Staged session-end summary for reflection');
+  });
+
+  it('includes correct fields in summary', () => {
+    mockedFs.readdirSync.mockReturnValue([] as unknown as fs.Dirent[]);
+
+    stageSessionEndSummary({
+      isScheduledTask: false,
+      messageCount: 3,
+      firstPrompt: 'Test prompt content',
+      startTime: Date.now() - 5000,
+    }, mockLog);
+
+    const writeCall = mockedFs.writeFileSync.mock.calls.find(call =>
+      String(call[0]).includes('session-end'),
+    );
+    expect(writeCall).toBeDefined();
+    const parsed = JSON.parse(writeCall![1] as string);
+    expect(parsed.type).toBe('session-end');
+    expect(parsed.messageCount).toBe(3);
+    expect(parsed.firstPromptSnippet).toBe('Test prompt content');
+    expect(parsed.durationMs).toBeGreaterThan(0);
+    expect(parsed.timestamp).toBeDefined();
+  });
+
+  it('skips when isScheduledTask is true', () => {
+    stageSessionEndSummary({
+      isScheduledTask: true,
+      messageCount: 5,
+      firstPrompt: 'Hello',
+      startTime: Date.now(),
+    }, mockLog);
+
+    expect(mockedFs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('skips when messageCount is 0', () => {
+    stageSessionEndSummary({
+      isScheduledTask: false,
+      messageCount: 0,
+      firstPrompt: '',
+      startTime: Date.now(),
+    }, mockLog);
+
+    expect(mockedFs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('respects 30-file rotation cap', () => {
+    const pendingFiles = Array.from(
+      { length: 30 },
+      (_, i) => `${1000 + i}-session-end-abc.json`,
+    );
+    mockedFs.readdirSync.mockReturnValue(pendingFiles as unknown as fs.Dirent[]);
+    mockedFs.statSync.mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      const match = s.match(/(\d+)-session-end/);
+      return { mtimeMs: match ? parseInt(match[1]) : 0 } as fs.Stats;
+    });
+
+    stageSessionEndSummary({
+      isScheduledTask: false,
+      messageCount: 1,
+      firstPrompt: 'Hi',
+      startTime: Date.now(),
+    }, mockLog);
+
+    // Should have deleted the oldest file
+    expect(mockedFs.unlinkSync).toHaveBeenCalledWith(
+      expect.stringContaining('1000-session-end-abc.json'),
+    );
+    // And written a new one
+    expect(mockedFs.writeFileSync).toHaveBeenCalled();
+  });
+
+  it('handles write errors gracefully', () => {
+    mockedFs.readdirSync.mockReturnValue([] as unknown as fs.Dirent[]);
+    mockedFs.writeFileSync.mockImplementation(() => {
+      throw new Error('ENOSPC: no space left');
+    });
+
+    // Should not throw
+    stageSessionEndSummary({
+      isScheduledTask: false,
+      messageCount: 1,
+      firstPrompt: 'Hi',
+      startTime: Date.now(),
+    }, mockLog);
+
+    expect(mockLog).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to stage session-end summary'),
+    );
+  });
+
+  it('truncates long first prompt to 500 chars', () => {
+    mockedFs.readdirSync.mockReturnValue([] as unknown as fs.Dirent[]);
+
+    const longPrompt = 'a'.repeat(1000);
+    stageSessionEndSummary({
+      isScheduledTask: false,
+      messageCount: 1,
+      firstPrompt: longPrompt,
+      startTime: Date.now(),
+    }, mockLog);
+
+    const writeCall = mockedFs.writeFileSync.mock.calls.find(call =>
+      String(call[0]).includes('session-end'),
+    );
+    const parsed = JSON.parse(writeCall![1] as string);
+    expect(parsed.firstPromptSnippet.length).toBe(500);
   });
 });

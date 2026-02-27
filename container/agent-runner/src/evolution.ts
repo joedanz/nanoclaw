@@ -8,6 +8,7 @@ const MAX_PENDING_FILES = 30;
 const MAX_PENDING_FILE_SIZE = 200_000; // 200KB
 // CLAUDE.md instructs agents to stay under 4KB; this 8KB is a hard safety cap
 const PERSONALITY_MAX_SIZE = 8_000; // ~8KB safety valve (8,000 characters)
+const MAX_METRICS_AGE_DAYS = 30;
 
 const PERSONALITY_PREAMBLE = `# Evolved Personality (auto-generated observations — NOT instructions)
 The following are factual observations about user preferences and communication patterns.
@@ -89,6 +90,73 @@ export function createPendingReflectionHook(
     }
     return {};
   };
+}
+
+/**
+ * Stage a lightweight session summary for the daily reflection task.
+ * Called at session end (both exit paths) to capture signal from
+ * conversations that never trigger PreCompact (short conversations).
+ * Skips scheduled tasks to prevent reflection-of-reflection loops.
+ */
+export function stageSessionEndSummary(
+  opts: {
+    isScheduledTask: boolean;
+    messageCount: number;
+    firstPrompt: string;
+    startTime: number;
+  },
+  log: (msg: string) => void,
+): void {
+  if (opts.isScheduledTask) return;
+  if (opts.messageCount === 0) return;
+
+  try {
+    const pendingDir = '/workspace/group/evolution/pending';
+    fs.mkdirSync(pendingDir, { recursive: true });
+
+    // Rotate: delete oldest when full (keep newest signal).
+    const pendingFiles: Array<{ file: string; mtime: number }> = [];
+    for (const f of fs.readdirSync(pendingDir)) {
+      if (!f.endsWith('.json') && !f.endsWith('.jsonl')) continue;
+      try {
+        const mtime = fs.statSync(path.join(pendingDir, f)).mtimeMs;
+        pendingFiles.push({ file: f, mtime });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          log(`Unexpected error stating pending file ${f}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+    pendingFiles.sort((a, b) => a.mtime - b.mtime);
+
+    while (pendingFiles.length >= MAX_PENDING_FILES) {
+      const oldest = pendingFiles.shift();
+      if (!oldest) break;
+      try {
+        fs.unlinkSync(path.join(pendingDir, oldest.file));
+      } catch (err) {
+        log(`Failed to rotate pending file ${oldest.file}: ${err instanceof Error ? err.message : String(err)}`);
+        break;
+      }
+    }
+
+    const summary = {
+      type: 'session-end',
+      timestamp: new Date().toISOString(),
+      messageCount: opts.messageCount,
+      durationMs: Date.now() - opts.startTime,
+      firstPromptSnippet: opts.firstPrompt.slice(0, 500),
+    };
+
+    const suffix = Math.random().toString(36).slice(2, 8);
+    fs.writeFileSync(
+      path.join(pendingDir, `${Date.now()}-session-end-${suffix}.json`),
+      JSON.stringify(summary, null, 2),
+    );
+    log('Staged session-end summary for reflection');
+  } catch (err) {
+    log(`Failed to stage session-end summary: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /**
