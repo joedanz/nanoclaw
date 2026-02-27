@@ -40,7 +40,17 @@ export function syncAgentSkills(
   let count = 0;
   const syncedSkills = new Set<string>();
 
-  for (const skillDir of fs.readdirSync(agentSkillsSrc).sort()) {
+  let srcEntries: string[];
+  try {
+    srcEntries = fs.readdirSync(agentSkillsSrc).sort();
+  } catch (err) {
+    log(`Failed to read agent skills source ${agentSkillsSrc}: ${errMsg(err)}`);
+    // Fall through to prune with empty synced set
+    pruneOrphanedSkills(skillsDst, new Set(), builtInSkillNames, log);
+    return;
+  }
+
+  for (const skillDir of srcEntries) {
     if (!SKILL_NAME_PATTERN.test(skillDir)) continue;
     if (builtInSkillNames.has(skillDir)) continue;
 
@@ -84,7 +94,9 @@ export function syncAgentSkills(
       continue;
     }
     // Case-insensitive check to prevent bypass via mixed casing
-    const contentLower = content.toLowerCase();
+    const contentLower = content
+      .replace(/[\u200b\u200c\u200d\ufeff\u00ad]/g, '')
+      .toLowerCase();
     if (DANGEROUS_PATTERNS.some((p) => contentLower.includes(p))) {
       log(`Skipping skill ${skillDir}: contains dangerous pattern`);
       continue;
@@ -131,15 +143,33 @@ function pruneOrphanedSkills(
 ): void {
   if (!fs.existsSync(skillsDst)) return;
 
-  for (const dir of fs.readdirSync(skillsDst)) {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(skillsDst);
+  } catch (err) {
+    log?.(`Failed to read skills destination ${skillsDst}: ${errMsg(err)}`);
+    return;
+  }
+
+  for (const dir of entries) {
+    if (!SKILL_NAME_PATTERN.test(dir)) continue;
     if (builtInSkillNames.has(dir)) continue;
     if (syncedSkills.has(dir)) continue;
-    // Only prune directories that have a SKILL.md (agent-created skills)
-    const skillMdPath = path.join(skillsDst, dir, 'SKILL.md');
-    if (!fs.existsSync(skillMdPath)) continue;
+
+    const dirPath = path.join(skillsDst, dir);
+    try {
+      const st = fs.lstatSync(dirPath);
+      if (!st.isDirectory() || st.isSymbolicLink()) continue;
+    } catch { continue; }
+
+    const skillMdPath = path.join(dirPath, 'SKILL.md');
+    try {
+      const st = fs.lstatSync(skillMdPath);
+      if (!st.isFile() || st.isSymbolicLink()) continue;
+    } catch { continue; }
 
     try {
-      fs.rmSync(path.join(skillsDst, dir), { recursive: true, force: true });
+      fs.rmSync(dirPath, { recursive: true, force: true });
       log?.(`Pruned orphaned agent skill: ${dir}`);
     } catch (err) {
       log?.(`Failed to prune skill ${dir}: ${errMsg(err)}`);

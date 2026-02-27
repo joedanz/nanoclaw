@@ -329,7 +329,11 @@ function drainIpcInput(): string[] {
         }
       } catch (err) {
         log(`Failed to process input file ${file}: ${err instanceof Error ? err.message : String(err)}`);
-        try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+        try { fs.unlinkSync(filePath); } catch (cleanupErr) {
+          if ((cleanupErr as NodeJS.ErrnoException).code !== 'ENOENT') {
+            log(`Failed to clean up corrupt input file ${file}: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`);
+          }
+        }
       }
     }
     return messages;
@@ -410,8 +414,10 @@ async function runQuery(
     ? '/workspace/project/groups/global/CLAUDE.md'
     : '/workspace/global/CLAUDE.md';
   let globalClaudeMd: string | undefined;
-  if (fs.existsSync(globalClaudeMdPath)) {
+  try {
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
+  } catch {
+    // File may not exist yet — not an error
   }
 
   // Load evolved personality observations (if any)
@@ -517,7 +523,11 @@ async function main(): Promise<void> {
     const stdinData = await readStdin();
     containerInput = JSON.parse(stdinData);
     // Delete the temp file the entrypoint wrote — it contains secrets
-    try { fs.unlinkSync('/tmp/input.json'); } catch { /* may not exist */ }
+    try { fs.unlinkSync('/tmp/input.json'); } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        log(`WARNING: Failed to delete secrets file /tmp/input.json: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     log(`Received input for group: ${containerInput.groupFolder}`);
   } catch (err) {
     writeOutput({
@@ -542,7 +552,11 @@ async function main(): Promise<void> {
   fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
 
   // Clean up stale _close sentinel from previous container runs
-  try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }
+  try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      log(`WARNING: Failed to remove stale close sentinel: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // Build initial prompt (drain any pending IPC messages too)
   let prompt = containerInput.prompt;

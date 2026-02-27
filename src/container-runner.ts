@@ -55,6 +55,87 @@ interface VolumeMount {
   readonly: boolean;
 }
 
+/**
+ * Sync agent-runner source into a per-group writable location so agents
+ * can customize it (add tools, change behavior) without affecting other
+ * groups. Recompiled on container startup via entrypoint.sh.
+ *
+ * Returns true if the directory is safe to mount (sync succeeded or
+ * was skipped with valid existing content).
+ */
+function syncAgentRunner(
+  groupAgentRunnerDir: string,
+  agentRunnerSrc: string,
+  groupFolder: string,
+): boolean {
+  // Version-based sync: update runner when base version changes.
+  // .keep-local-agent-runner escape hatch for intentionally customized groups.
+  // IMPORTANT: Bump this version string whenever agent-runner source changes
+  // that need to propagate to existing groups (e.g., new hooks, new tools).
+  const AGENT_RUNNER_BASE_VERSION = '2026-02-27';
+  const versionFile = path.join(groupAgentRunnerDir, '.base-version');
+  const localOverride = path.join(
+    groupAgentRunnerDir,
+    '.keep-local-agent-runner',
+  );
+
+  let currentVersion: string | null = null;
+  try {
+    currentVersion = fs.readFileSync(versionFile, 'utf-8').trim();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logger.warn(
+        { group: groupFolder, versionFile, error: err },
+        'Failed to read agent-runner base version, will re-sync',
+      );
+    }
+    currentVersion = null;
+  }
+
+  const shouldSync =
+    !fs.existsSync(groupAgentRunnerDir) ||
+    currentVersion !== AGENT_RUNNER_BASE_VERSION;
+
+  let syncFailed = false;
+  if (
+    shouldSync &&
+    !fs.existsSync(localOverride) &&
+    fs.existsSync(agentRunnerSrc)
+  ) {
+    // Full refresh to prevent stale deleted/renamed files from lingering
+    try {
+      fs.rmSync(groupAgentRunnerDir, { recursive: true, force: true });
+      fs.mkdirSync(groupAgentRunnerDir, { recursive: true });
+      fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, {
+        recursive: true,
+        force: true,
+      });
+      fs.writeFileSync(versionFile, `${AGENT_RUNNER_BASE_VERSION}\n`);
+    } catch (err) {
+      syncFailed = true;
+      logger.error(
+        { group: groupFolder, error: err },
+        'Failed to sync agent-runner source; container may use stale code',
+      );
+    }
+  }
+
+  // Skip mount if sync failed mid-way (rmSync succeeded but cpSync didn't),
+  // leaving an empty/partial directory that would crash the container.
+  if (
+    !syncFailed ||
+    fs.existsSync(path.join(groupAgentRunnerDir, 'index.ts'))
+  ) {
+    return true;
+  }
+
+  logger.error(
+    { group: groupFolder },
+    'Skipping agent-runner mount due to broken sync; container will use baked-in runner',
+  );
+  return false;
+}
+
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
@@ -141,11 +222,13 @@ function buildVolumeMounts(
   if (fs.existsSync(skillsSrc)) {
     for (const skillDir of fs.readdirSync(skillsSrc)) {
       const srcDir = path.join(skillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      builtInSkillNames.add(skillDir);
+      try {
+        if (!fs.lstatSync(srcDir).isDirectory()) continue;
+      } catch { continue; }
       try {
         const dstDir = path.join(skillsDst, skillDir);
         fs.cpSync(srcDir, dstDir, { recursive: true });
+        builtInSkillNames.add(skillDir);
       } catch (err) {
         logger.error(
           { group: group.folder, skill: skillDir, error: err },
@@ -177,9 +260,7 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Copy agent-runner source into a per-group writable location so agents
-  // can customize it (add tools, change behavior) without affecting other
-  // groups. Recompiled on container startup via entrypoint.sh.
+  // Sync agent-runner source into per-group writable location
   const agentRunnerSrc = path.join(
     projectRoot,
     'container',
@@ -192,73 +273,12 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
-  // Version-based sync: update runner when base version changes.
-  // .keep-local-agent-runner escape hatch for intentionally customized groups.
-  // IMPORTANT: Bump this version string whenever agent-runner source changes
-  // that need to propagate to existing groups (e.g., new hooks, new tools).
-  const AGENT_RUNNER_BASE_VERSION = 'evolving-personality-v1';
-  const versionFile = path.join(groupAgentRunnerDir, '.base-version');
-  const localOverride = path.join(
-    groupAgentRunnerDir,
-    '.keep-local-agent-runner',
-  );
-
-  let currentVersion: string | null = null;
-  try {
-    currentVersion = fs.readFileSync(versionFile, 'utf-8').trim();
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      logger.warn(
-        { group: group.folder, versionFile, error: err },
-        'Failed to read agent-runner base version, will re-sync',
-      );
-    }
-    currentVersion = null;
-  }
-
-  const shouldSync =
-    !fs.existsSync(groupAgentRunnerDir) ||
-    currentVersion !== AGENT_RUNNER_BASE_VERSION;
-
-  let syncFailed = false;
-  if (
-    shouldSync &&
-    !fs.existsSync(localOverride) &&
-    fs.existsSync(agentRunnerSrc)
-  ) {
-    // Full refresh to prevent stale deleted/renamed files from lingering
-    try {
-      fs.rmSync(groupAgentRunnerDir, { recursive: true, force: true });
-      fs.mkdirSync(groupAgentRunnerDir, { recursive: true });
-      fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, {
-        recursive: true,
-        force: true,
-      });
-      fs.writeFileSync(versionFile, `${AGENT_RUNNER_BASE_VERSION}\n`);
-    } catch (err) {
-      syncFailed = true;
-      logger.error(
-        { group: group.folder, error: err },
-        'Failed to sync agent-runner source; container may use stale code',
-      );
-    }
-  }
-  // Skip mount if sync failed mid-way (rmSync succeeded but cpSync didn't),
-  // leaving an empty/partial directory that would crash the container.
-  if (
-    !syncFailed ||
-    fs.existsSync(path.join(groupAgentRunnerDir, 'index.ts'))
-  ) {
+  if (syncAgentRunner(groupAgentRunnerDir, agentRunnerSrc, group.folder)) {
     mounts.push({
       hostPath: groupAgentRunnerDir,
       containerPath: '/app/src',
       readonly: false,
     });
-  } else {
-    logger.error(
-      { group: group.folder },
-      'Skipping agent-runner mount due to broken sync; container will use baked-in runner',
-    );
   }
 
   // Additional mounts validated against external allowlist (tamper-proof from containers)

@@ -308,7 +308,7 @@ describe('agent-runner version-based sync', () => {
     );
     expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
       expect.stringContaining('.base-version'),
-      expect.stringContaining('evolving-personality-v1'),
+      expect.stringContaining('2026-02-27'),
     );
   });
 
@@ -363,7 +363,7 @@ describe('agent-runner version-based sync', () => {
     mockExistsPaths({});
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
       if (String(p).includes('.base-version'))
-        return 'evolving-personality-v1\n';
+        return '2026-02-27\n';
       return '';
     }) as typeof fs.readFileSync);
 

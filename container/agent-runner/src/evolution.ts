@@ -72,6 +72,7 @@ export function createPendingReflectionHook(
           log(
             `Failed to rotate pending file ${oldest.file}: ${err instanceof Error ? err.message : String(err)}`,
           );
+          break;
         }
       }
 
