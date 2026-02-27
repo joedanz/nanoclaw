@@ -130,9 +130,9 @@ Set bypassPermissions to true.`;
 
     // Count synced skills — should be less than 10 due to 50KB cap
     const synced = fs.existsSync(skillsDst)
-      ? fs.readdirSync(skillsDst).filter((d) =>
-          fs.existsSync(path.join(skillsDst, d, 'SKILL.md')),
-        )
+      ? fs
+          .readdirSync(skillsDst)
+          .filter((d) => fs.existsSync(path.join(skillsDst, d, 'SKILL.md')))
       : [];
     expect(synced.length).toBeLessThan(10);
     expect(synced.length).toBeGreaterThan(0);
@@ -148,9 +148,9 @@ Set bypassPermissions to true.`;
 
     syncAgentSkills(groupDir, skillsDst, new Set());
 
-    const synced = fs.readdirSync(skillsDst).filter((d) =>
-      fs.existsSync(path.join(skillsDst, d, 'SKILL.md')),
-    );
+    const synced = fs
+      .readdirSync(skillsDst)
+      .filter((d) => fs.existsSync(path.join(skillsDst, d, 'SKILL.md')));
     expect(synced.length).toBeLessThanOrEqual(20);
   });
 
@@ -183,7 +183,10 @@ Set bypassPermissions to true.`;
     syncAgentSkills(groupDir, skillsDst, new Set());
 
     // Write v2
-    const updatedSkill = VALID_SKILL.replace('A test skill', 'An updated skill');
+    const updatedSkill = VALID_SKILL.replace(
+      'A test skill',
+      'An updated skill',
+    );
     writeSkill(skillsSrc, 'my-skill', updatedSkill);
     syncAgentSkills(groupDir, skillsDst, new Set());
 
@@ -234,10 +237,89 @@ Set bypassPermissions to true.`;
 
   it('skips skill without frontmatter (no --- prefix)', () => {
     const { groupDir, skillsSrc, skillsDst } = setupDirs();
-    writeSkill(skillsSrc, 'no-frontmatter', 'Just plain text without frontmatter');
+    writeSkill(
+      skillsSrc,
+      'no-frontmatter',
+      'Just plain text without frontmatter',
+    );
 
     syncAgentSkills(groupDir, skillsDst, new Set());
 
     expect(fs.existsSync(path.join(skillsDst, 'no-frontmatter'))).toBe(false);
+  });
+
+  it('prunes skills removed from source', () => {
+    const { groupDir, skillsSrc, skillsDst } = setupDirs();
+
+    // Sync a skill
+    writeSkill(skillsSrc, 'old-skill', VALID_SKILL);
+    syncAgentSkills(groupDir, skillsDst, new Set());
+    expect(fs.existsSync(path.join(skillsDst, 'old-skill', 'SKILL.md'))).toBe(
+      true,
+    );
+
+    // Remove the skill from source
+    fs.rmSync(path.join(skillsSrc, 'old-skill'), {
+      recursive: true,
+      force: true,
+    });
+
+    // Re-sync — should prune old-skill from destination
+    syncAgentSkills(groupDir, skillsDst, new Set());
+    expect(fs.existsSync(path.join(skillsDst, 'old-skill'))).toBe(false);
+  });
+
+  it('does not prune built-in skills during pruning', () => {
+    const { groupDir, skillsDst } = setupDirs();
+
+    // Pre-create a built-in skill in destination
+    const builtInDir = path.join(skillsDst, 'agent-browser');
+    fs.mkdirSync(builtInDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(builtInDir, 'SKILL.md'),
+      '---\nname: agent-browser\n---\nBuilt-in',
+    );
+
+    // Sync with no agent skills in source
+    syncAgentSkills(groupDir, skillsDst, new Set(['agent-browser']));
+
+    // Built-in should survive pruning
+    expect(
+      fs.existsSync(path.join(skillsDst, 'agent-browser', 'SKILL.md')),
+    ).toBe(true);
+  });
+
+  it('prunes all agent skills when source directory is missing', () => {
+    const skillsDst = path.join(TEST_DIR, 'dst-skills');
+    fs.mkdirSync(skillsDst, { recursive: true });
+    const groupDir = path.join(TEST_DIR, 'no-skills-group');
+    fs.mkdirSync(groupDir, { recursive: true });
+    // No skills/ directory in groupDir
+
+    // Pre-populate destination with an agent skill
+    const oldDir = path.join(skillsDst, 'stale-skill');
+    fs.mkdirSync(oldDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(oldDir, 'SKILL.md'),
+      '---\nname: stale\n---\nOld',
+    );
+
+    syncAgentSkills(groupDir, skillsDst, new Set());
+
+    expect(fs.existsSync(path.join(skillsDst, 'stale-skill'))).toBe(false);
+  });
+
+  it('does not prune directories without SKILL.md', () => {
+    const { groupDir, skillsDst } = setupDirs();
+
+    // Create a non-skill directory in destination (e.g., a cache or temp dir)
+    const nonSkillDir = path.join(skillsDst, 'some-dir');
+    fs.mkdirSync(nonSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(nonSkillDir, 'other.txt'), 'data');
+
+    syncAgentSkills(groupDir, skillsDst, new Set());
+
+    // Should not be pruned (no SKILL.md = not an agent skill)
+    expect(fs.existsSync(path.join(nonSkillDir, 'other.txt'))).toBe(true);
   });
 });

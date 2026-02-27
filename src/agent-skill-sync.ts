@@ -26,10 +26,15 @@ export function syncAgentSkills(
   log?: (msg: string) => void,
 ): void {
   const agentSkillsSrc = path.join(groupDir, 'skills');
-  if (!fs.existsSync(agentSkillsSrc)) return;
+  if (!fs.existsSync(agentSkillsSrc)) {
+    // Source gone — prune all agent-created skills from destination
+    pruneOrphanedSkills(skillsDst, new Set(), builtInSkillNames, log);
+    return;
+  }
 
   let totalSize = 0;
   let count = 0;
+  const syncedSkills = new Set<string>();
 
   for (const skillDir of fs.readdirSync(agentSkillsSrc)) {
     if (!SKILL_NAME_PATTERN.test(skillDir)) continue;
@@ -90,6 +95,7 @@ export function syncAgentSkills(
       const tmpPath = `${dstPath}.tmp`;
       fs.writeFileSync(tmpPath, content);
       fs.renameSync(tmpPath, dstPath);
+      syncedSkills.add(skillDir);
     } catch (err) {
       log?.(
         `Failed to write skill ${skillDir}: ${err instanceof Error ? err.message : String(err)}`,
@@ -101,6 +107,39 @@ export function syncAgentSkills(
         /* best effort cleanup */
       }
       continue;
+    }
+  }
+
+  // Prune agent-created skills that no longer exist in source
+  pruneOrphanedSkills(skillsDst, syncedSkills, builtInSkillNames, log);
+}
+
+/**
+ * Remove destination skills that are not in the synced set and not built-in.
+ * This prevents deleted/renamed skills from persisting in .claude/skills/.
+ */
+function pruneOrphanedSkills(
+  skillsDst: string,
+  syncedSkills: Set<string>,
+  builtInSkillNames: Set<string>,
+  log?: (msg: string) => void,
+): void {
+  if (!fs.existsSync(skillsDst)) return;
+
+  for (const dir of fs.readdirSync(skillsDst)) {
+    if (builtInSkillNames.has(dir)) continue;
+    if (syncedSkills.has(dir)) continue;
+    // Only prune directories that have a SKILL.md (agent-created skills)
+    const skillMdPath = path.join(skillsDst, dir, 'SKILL.md');
+    if (!fs.existsSync(skillMdPath)) continue;
+
+    try {
+      fs.rmSync(path.join(skillsDst, dir), { recursive: true, force: true });
+      log?.(`Pruned orphaned agent skill: ${dir}`);
+    } catch (err) {
+      log?.(
+        `Failed to prune skill ${dir}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 }

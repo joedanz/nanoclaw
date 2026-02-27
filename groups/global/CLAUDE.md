@@ -63,7 +63,7 @@ You have an evolving personality. Your personality file at `evolution/personalit
 
 ### Bootstrap
 
-If the `evolution/` directory does not exist in your workspace (`/workspace/group/`), initialize it:
+If `evolution/personality.md` does not exist in your workspace (`/workspace/group/`), initialize the evolution system:
 1. Create `evolution/` with subdirectories: `pending/`, `learnings/`
 2. Create `evolution/personality.md` with a minimal profile:
    - Communication style observations (start empty)
@@ -76,7 +76,7 @@ If the `evolution/` directory does not exist in your workspace (`/workspace/grou
    - context_mode: `isolated`
    - prompt: use the exact Reflection Prompt section below (verbatim full text)
 
-Do NOT call `mcp__nanoclaw__list_tasks` on every session — only bootstrap when `evolution/` does not exist.
+Do NOT call `mcp__nanoclaw__list_tasks` on every session — only bootstrap when `evolution/personality.md` does not exist.
 
 ### Learning During Conversations
 

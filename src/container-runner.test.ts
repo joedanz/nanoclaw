@@ -41,7 +41,11 @@ vi.mock('fs', async () => {
       readFileSync: vi.fn(() => ''),
       readdirSync: vi.fn(() => []),
       statSync: vi.fn(() => ({ isDirectory: () => false })),
-      lstatSync: vi.fn(() => ({ isDirectory: () => true, isSymbolicLink: () => false, isFile: () => true })),
+      lstatSync: vi.fn(() => ({
+        isDirectory: () => true,
+        isSymbolicLink: () => false,
+        isFile: () => true,
+      })),
       copyFileSync: vi.fn(),
       cpSync: vi.fn(),
       rmSync: vi.fn(),
@@ -263,7 +267,8 @@ describe('agent-runner version-based sync', () => {
       const s = String(p);
       if (s.includes('.keep-local-agent-runner')) return false;
       if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
+        return true;
       return false;
     });
     // .base-version doesn't exist → readFileSync throws ENOENT
@@ -299,7 +304,8 @@ describe('agent-runner version-based sync', () => {
       const s = String(p);
       if (s.includes('.keep-local-agent-runner')) return false;
       if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
+        return true;
       return false;
     });
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
@@ -322,7 +328,8 @@ describe('agent-runner version-based sync', () => {
       const s = String(p);
       if (s.includes('.keep-local-agent-runner')) return true;
       if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
+        return true;
       return false;
     });
 
@@ -345,7 +352,8 @@ describe('agent-runner version-based sync', () => {
       const s = String(p);
       if (s.includes('.keep-local-agent-runner')) return false;
       if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
+        return true;
       return false;
     });
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
@@ -364,11 +372,13 @@ describe('agent-runner version-based sync', () => {
       const s = String(p);
       if (s.includes('.keep-local-agent-runner')) return false;
       if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
+        return true;
       return false;
     });
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
-      if (String(p).includes('.base-version')) return 'evolving-personality-v1\n';
+      if (String(p).includes('.base-version'))
+        return 'evolving-personality-v1\n';
       return '';
     }) as typeof fs.readFileSync);
 
@@ -388,15 +398,23 @@ describe('agent-runner version-based sync', () => {
 
   it('full refresh removes stale files before copy', async () => {
     const callOrder: string[] = [];
-    mockedFs.rmSync.mockImplementation(() => { callOrder.push('rmSync'); });
-    mockedFs.mkdirSync.mockImplementation(() => { callOrder.push('mkdirSync'); return undefined; });
-    mockedFs.cpSync.mockImplementation(() => { callOrder.push('cpSync'); });
+    mockedFs.rmSync.mockImplementation(() => {
+      callOrder.push('rmSync');
+    });
+    mockedFs.mkdirSync.mockImplementation(() => {
+      callOrder.push('mkdirSync');
+      return undefined;
+    });
+    mockedFs.cpSync.mockImplementation(() => {
+      callOrder.push('cpSync');
+    });
 
     mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
       const s = String(p);
       if (s.includes('.keep-local-agent-runner')) return false;
       if (s.includes('agent-runner-src')) return true;
-      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src')))
+        return true;
       return false;
     });
     // No .base-version file → ENOENT triggers sync
