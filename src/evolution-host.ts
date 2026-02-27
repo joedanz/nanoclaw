@@ -102,7 +102,10 @@ export function syncAgentRunner(
  * Runs on the host before container start for reliability.
  * Uses SHA-256 hash to detect changes, caps history at MAX_PERSONALITY_HISTORY files.
  */
-export function snapshotPersonality(groupDir: string, groupFolder: string): void {
+export function snapshotPersonality(
+  groupDir: string,
+  groupFolder: string,
+): void {
   const personalityPath = path.join(groupDir, 'evolution', 'personality.md');
 
   let content: string;

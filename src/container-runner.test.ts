@@ -66,7 +66,9 @@ vi.mock('./agent-skill-sync.js', () => ({
 
 // Mock evolution-host (extracted from container-runner.ts)
 vi.mock('./evolution-host.js', async () => {
-  const actual = await vi.importActual<typeof import('./evolution-host.js')>('./evolution-host.js');
+  const actual = await vi.importActual<typeof import('./evolution-host.js')>(
+    './evolution-host.js',
+  );
   return {
     AGENT_RUNNER_BASE_VERSION: actual.AGENT_RUNNER_BASE_VERSION,
     syncAgentRunner: vi.fn(() => true),

@@ -61,7 +61,11 @@ describe('syncAgentRunner', () => {
       return '';
     }) as typeof fs.readFileSync);
 
-    const result = syncAgentRunner('/data/agent-runner-src', '/src/source', 'test-group');
+    const result = syncAgentRunner(
+      '/data/agent-runner-src',
+      '/src/source',
+      'test-group',
+    );
 
     expect(result).toBe(true);
     expect(mockedFs.rmSync).toHaveBeenCalledWith(
@@ -92,7 +96,11 @@ describe('syncAgentRunner', () => {
       return '';
     }) as typeof fs.readFileSync);
 
-    const result = syncAgentRunner('/data/agent-runner-src', '/src/source', 'test-group');
+    const result = syncAgentRunner(
+      '/data/agent-runner-src',
+      '/src/source',
+      'test-group',
+    );
 
     expect(result).toBe(true);
     expect(mockedFs.rmSync).toHaveBeenCalled();
@@ -108,11 +116,16 @@ describe('syncAgentRunner', () => {
       return false;
     });
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
-      if (String(p).includes('.base-version')) return `${AGENT_RUNNER_BASE_VERSION}\n`;
+      if (String(p).includes('.base-version'))
+        return `${AGENT_RUNNER_BASE_VERSION}\n`;
       return '';
     }) as typeof fs.readFileSync);
 
-    const result = syncAgentRunner('/data/agent-runner-src', '/src/source', 'test-group');
+    const result = syncAgentRunner(
+      '/data/agent-runner-src',
+      '/src/source',
+      'test-group',
+    );
 
     expect(result).toBe(true);
     expect(mockedFs.rmSync).not.toHaveBeenCalled();
@@ -132,7 +145,11 @@ describe('syncAgentRunner', () => {
       return '';
     }) as typeof fs.readFileSync);
 
-    const result = syncAgentRunner('/data/agent-runner-src', '/src/source', 'test-group');
+    const result = syncAgentRunner(
+      '/data/agent-runner-src',
+      '/src/source',
+      'test-group',
+    );
 
     expect(result).toBe(true);
     expect(mockedFs.rmSync).not.toHaveBeenCalled();
@@ -160,7 +177,11 @@ describe('syncAgentRunner', () => {
       throw new Error('ENOSPC');
     });
 
-    const result = syncAgentRunner('/data/agent-runner-src', '/src/source', 'test-group');
+    const result = syncAgentRunner(
+      '/data/agent-runner-src',
+      '/src/source',
+      'test-group',
+    );
 
     expect(result).toBe(false);
   });

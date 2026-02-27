@@ -35,7 +35,8 @@ export function writeFeedback(groupFolder: string, entry: FeedbackEntry): void {
     fs.mkdirSync(feedbackDir, { recursive: true });
 
     // Rotate: delete oldest when at cap
-    const files = fs.readdirSync(feedbackDir)
+    const files = fs
+      .readdirSync(feedbackDir)
       .filter((f) => f.endsWith('.json'))
       .sort();
     while (files.length >= MAX_FEEDBACK_FILES) {

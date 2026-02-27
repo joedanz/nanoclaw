@@ -370,7 +370,11 @@ async function startMessageLoop(): Promise<void> {
 
           // Intercept feedback commands (!good, !bad) — written to evolution/feedback/
           const normalMessages = filterFeedbackMessages(
-            groupMessages, group.folder, chatJid, lastAgentTimestamp, lastAgentMessage,
+            groupMessages,
+            group.folder,
+            chatJid,
+            lastAgentTimestamp,
+            lastAgentMessage,
           );
           if (normalMessages.length === 0) continue;
 

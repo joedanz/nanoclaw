@@ -112,7 +112,9 @@ describe('writeFeedback', () => {
       { recursive: true },
     );
     expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
-      expect.stringMatching(/\/groups\/test-group\/evolution\/feedback\/\d+-\w+\.json$/),
+      expect.stringMatching(
+        /\/groups\/test-group\/evolution\/feedback\/\d+-\w+\.json$/,
+      ),
       expect.stringContaining('"rating": "positive"'),
     );
   });
@@ -132,9 +134,7 @@ describe('writeFeedback', () => {
   });
 
   it('rotates oldest files when at 100-file cap', () => {
-    const files = Array.from({ length: 100 }, (_, i) =>
-      `${1000 + i}-abc.json`,
-    );
+    const files = Array.from({ length: 100 }, (_, i) => `${1000 + i}-abc.json`);
     (mockedFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue(files);
 
     writeFeedback('test-group', {
@@ -166,7 +166,10 @@ describe('filterFeedbackMessages', () => {
     ];
 
     const result = filterFeedbackMessages(
-      messages, 'test-group', 'group@g.us', {},
+      messages,
+      'test-group',
+      'group@g.us',
+      {},
     );
 
     expect(result).toHaveLength(2);
@@ -182,7 +185,10 @@ describe('filterFeedbackMessages', () => {
     const messages = [makeMessage('!bad')];
 
     const result = filterFeedbackMessages(
-      messages, 'test-group', 'group@g.us', {},
+      messages,
+      'test-group',
+      'group@g.us',
+      {},
     );
 
     expect(result).toHaveLength(0);
@@ -193,13 +199,13 @@ describe('filterFeedbackMessages', () => {
   });
 
   it('passes through normal messages', () => {
-    const messages = [
-      makeMessage('Hello'),
-      makeMessage('What time is it?'),
-    ];
+    const messages = [makeMessage('Hello'), makeMessage('What time is it?')];
 
     const result = filterFeedbackMessages(
-      messages, 'test-group', 'group@g.us', {},
+      messages,
+      'test-group',
+      'group@g.us',
+      {},
     );
 
     expect(result).toHaveLength(2);
@@ -209,23 +215,22 @@ describe('filterFeedbackMessages', () => {
   it('includes lastAgentTimestamp in contextSummary', () => {
     const messages = [makeMessage('!good')];
 
-    filterFeedbackMessages(
-      messages, 'test-group', 'group@g.us',
-      { 'group@g.us': '2026-02-27T10:00:00.000Z' },
-    );
+    filterFeedbackMessages(messages, 'test-group', 'group@g.us', {
+      'group@g.us': '2026-02-27T10:00:00.000Z',
+    });
 
     expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
       expect.any(String),
-      expect.stringContaining('Last agent response at 2026-02-27T10:00:00.000Z'),
+      expect.stringContaining(
+        'Last agent response at 2026-02-27T10:00:00.000Z',
+      ),
     );
   });
 
   it('reports no prior agent response when timestamp missing', () => {
     const messages = [makeMessage('!good')];
 
-    filterFeedbackMessages(
-      messages, 'test-group', 'group@g.us', {},
-    );
+    filterFeedbackMessages(messages, 'test-group', 'group@g.us', {});
 
     expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
       expect.any(String),
@@ -237,14 +242,18 @@ describe('filterFeedbackMessages', () => {
     const messages = [makeMessage('!good')];
 
     filterFeedbackMessages(
-      messages, 'test-group', 'group@g.us',
+      messages,
+      'test-group',
+      'group@g.us',
       { 'group@g.us': '2026-02-27T10:00:00.000Z' },
       { 'group@g.us': 'Here is my helpful response' },
     );
 
     expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
       expect.any(String),
-      expect.stringContaining('Last agent response: Here is my helpful response'),
+      expect.stringContaining(
+        'Last agent response: Here is my helpful response',
+      ),
     );
   });
 
@@ -252,14 +261,18 @@ describe('filterFeedbackMessages', () => {
     const messages = [makeMessage('!good')];
 
     filterFeedbackMessages(
-      messages, 'test-group', 'group@g.us',
+      messages,
+      'test-group',
+      'group@g.us',
       { 'group@g.us': '2026-02-27T10:00:00.000Z' },
       {},
     );
 
     expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
       expect.any(String),
-      expect.stringContaining('Last agent response at 2026-02-27T10:00:00.000Z'),
+      expect.stringContaining(
+        'Last agent response at 2026-02-27T10:00:00.000Z',
+      ),
     );
   });
 });
