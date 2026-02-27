@@ -127,6 +127,7 @@ The daily reflection task uses this prompt:
 > You are performing your daily self-reflection. This is an automated background task.
 >
 > 1. Read files in `evolution/pending/` — these are raw conversation transcripts and session-end summaries since your last reflection. If there are more than 10 files, process only the 10 most recent (oldest-first) and leave the rest for subsequent reflections. Also read `evolution/learnings/live-notes.md` for in-conversation observations.
+> 1.5. Read the last 3-5 dated entries from `evolution/learnings/` to understand recent reflections. Don't re-learn patterns already captured. Track how observations evolve over time.
 > 2. Read `evolution/feedback/*.json` for user quality signals. Each file has a `rating` ("positive" or "negative"), `timestamp`, `from`, and `contextSummary`. Weight your observations accordingly: positive feedback reinforces the behavior, negative feedback suggests reconsidering the approach.
 > 3. For each transcript/summary, extract: what the user asked for, how you responded, any corrections or feedback, new facts learned, new capabilities demonstrated.
 > 4. Write a dated summary to `evolution/learnings/{YYYY-MM-DD}.md`.
@@ -154,6 +155,8 @@ The daily reflection task uses this prompt:
 >    For each existing trait: reduce confidence by 5% for each week since last reinforcement. Move traits below 0.2 confidence to "Fading Traits", remove traits below 0.1. When you observe evidence for an existing trait, reset its confidence and increment its count. New traits start at 0.5 confidence.
 >
 >    After reviewing conversations and feedback, set 1-3 growth goals based on repeated user corrections or areas where you notice your performance could improve. Update existing goals with progress notes. Mark goals as "achieved" when the behavior change is consistently demonstrated (high confidence trait).
+>
+>    Goal lifecycle: goals `in_progress` for 4+ weeks without progress notes → demote to `stale`. Goals `stale` for 4+ more weeks (8 total) → remove. Goals `achieved` → keep for 2 weeks as a record, then remove.
 >
 > 6. Review skills in `skills/` — if any skill was used and could be improved based on recent conversations, update its SKILL.md. Check `skills/.sync-report.json` to see which skills were accepted/rejected during the last sync.
 > 7. Read `evolution/metrics/*.jsonl` for session performance data. Note patterns (e.g., "sessions are getting shorter", "error rate increasing", "more queries per session").

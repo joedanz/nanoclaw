@@ -18,7 +18,8 @@ import fs from 'fs';
 import path from 'path';
 import { query, HookCallback, PreCompactHookInput, PreToolUseHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
-import { createPendingReflectionHook, loadPersonality, loadCrossGroupInsights, buildSystemPrompt, stageSessionEndSummary, writeSessionMetrics } from './evolution.js';
+import { createPendingReflectionHook, loadPersonality, loadCrossGroupInsights, buildSystemPrompt, updateConversationIndex } from './evolution.js';
+import { createSessionTracker } from './session-lifecycle.js';
 
 interface ContainerInput {
   prompt: string;
@@ -178,6 +179,9 @@ function createPreCompactHook(assistantName?: string): HookCallback {
       fs.writeFileSync(filePath, markdown);
 
       log(`Archived conversation to ${filePath}`);
+
+      // Update conversation index after archiving
+      updateConversationIndex(log);
     } catch (err) {
       log(`Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -242,10 +246,15 @@ function parseTranscript(content: string): ParsedMessage[] {
           : entry.message.content.map((c: { text?: string }) => c.text || '').join('');
         if (text) messages.push({ role: 'user', content: text });
       } else if (entry.type === 'assistant' && entry.message?.content) {
-        const textParts = entry.message.content
-          .filter((c: { type: string }) => c.type === 'text')
-          .map((c: { text: string }) => c.text);
-        const text = textParts.join('');
+        const parts: string[] = [];
+        for (const block of entry.message.content) {
+          if (block.type === 'text' && block.text) {
+            parts.push(block.text);
+          } else if (block.type === 'tool_use' && block.name) {
+            parts.push(`[Used tool: ${block.name}]`);
+          }
+        }
+        const text = parts.join('');
         if (text) messages.push({ role: 'assistant', content: text });
       }
     } catch {
@@ -378,7 +387,7 @@ async function runQuery(
   containerInput: ContainerInput,
   sdkEnv: Record<string, string | undefined>,
   resumeAt?: string,
-): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
+): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean; messageCount: number }> {
   const stream = new MessageStream();
   stream.push(prompt);
 
@@ -516,7 +525,7 @@ async function runQuery(
 
   ipcPolling = false;
   log(`Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`);
-  return { newSessionId, lastAssistantUuid, closedDuringQuery };
+  return { newSessionId, lastAssistantUuid, closedDuringQuery, messageCount };
 }
 
 async function main(): Promise<void> {
@@ -573,33 +582,20 @@ async function main(): Promise<void> {
   }
 
   // Track session metrics for evolution
-  const sessionStartTime = Date.now();
-  let totalQueryCount = 0;
-
-  // Helper: record evolution data at session end
-  const onSessionEnd = (hadError: boolean) => {
-    stageSessionEndSummary({
-      isScheduledTask: containerInput.isScheduledTask ?? false,
-      messageCount: totalQueryCount,
-      firstPrompt: containerInput.prompt,
-      startTime: sessionStartTime,
-    }, log);
-    writeSessionMetrics({
-      sessionDuration: Date.now() - sessionStartTime,
-      messageCount: totalQueryCount,
-      hadError,
-      isScheduledTask: containerInput.isScheduledTask ?? false,
-    }, log);
-  };
+  const sessionTracker = createSessionTracker({
+    isScheduledTask: containerInput.isScheduledTask ?? false,
+    firstPrompt: containerInput.prompt,
+  }, log);
 
   // Query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
   try {
     while (true) {
-      totalQueryCount++;
+      sessionTracker.onQueryStart();
       log(`Starting query #${totalQueryCount} (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
 
       const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      sessionTracker.addSdkMessages(queryResult.messageCount);
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
       }
@@ -612,7 +608,7 @@ async function main(): Promise<void> {
       // idle timer and cause a 30-min delay before the next _close).
       if (queryResult.closedDuringQuery) {
         log('Close sentinel consumed during query, exiting');
-        onSessionEnd(false);
+        sessionTracker.onSessionEnd(false);
         break;
       }
 
@@ -625,7 +621,7 @@ async function main(): Promise<void> {
       const nextMessage = await waitForIpcMessage();
       if (nextMessage === null) {
         log('Close sentinel received, exiting');
-        onSessionEnd(false);
+        sessionTracker.onSessionEnd(false);
         break;
       }
 
@@ -635,7 +631,7 @@ async function main(): Promise<void> {
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     log(`Agent error: ${errorMessage}`);
-    onSessionEnd(true);
+    sessionTracker.onSessionEnd(true);
     writeOutput({
       status: 'error',
       result: null,

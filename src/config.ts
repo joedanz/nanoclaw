@@ -58,11 +58,6 @@ export const TRIGGER_PATTERN = new RegExp(
   'i',
 );
 
-// Feedback commands — quick thumbs-up/thumbs-down signals for the evolution system.
-// Intercepted in the message loop and NEVER forwarded to containers.
-export const FEEDBACK_POSITIVE_PATTERN = /^!(good|great|perfect|thanks)\s*$/i;
-export const FEEDBACK_NEGATIVE_PATTERN = /^!(bad|wrong|no|fix)\s*$/i;
-
 // Timezone for scheduled tasks (cron expressions, etc.)
 // Uses system timezone by default
 export const TIMEZONE =

@@ -24,7 +24,7 @@ vi.mock('fs', async () => {
 const mockedFs = vi.mocked(fs);
 
 // Import after mocks are set up
-const { createPendingReflectionHook, loadPersonality, loadCrossGroupInsights, buildSystemPrompt, stageSessionEndSummary, writeSessionMetrics, updateConversationIndex } =
+const { createPendingReflectionHook, loadPersonality, loadCrossGroupInsights, buildSystemPrompt, stageSessionEndSummary, writeSessionMetrics, updateConversationIndex, extractTopicSummary, validatePersonalityFormat } =
   await import('./evolution.js');
 
 describe('createPendingReflectionHook', () => {
@@ -655,12 +655,13 @@ describe('writeSessionMetrics', () => {
     mockedFs.unlinkSync.mockImplementation(vi.fn());
   });
 
-  it('writes correct JSONL line', () => {
+  it('writes correct JSONL line with queryCount and sdkMessageCount', () => {
     writeSessionMetrics({
       sessionDuration: 5000,
       messageCount: 3,
       hadError: false,
       isScheduledTask: false,
+      sdkMessageCount: 47,
     }, mockLog);
 
     expect(mockedFs.mkdirSync).toHaveBeenCalledWith(
@@ -671,7 +672,25 @@ describe('writeSessionMetrics', () => {
       expect.stringMatching(/\/workspace\/group\/evolution\/metrics\/\d{4}-\d{2}-\d{2}\.jsonl$/),
       expect.stringContaining('"sessionDuration":5000'),
     );
+    // Verify the JSONL line contains both queryCount and sdkMessageCount
+    const appendCall = mockedFs.appendFileSync.mock.calls[0];
+    const line = JSON.parse((appendCall![1] as string).trim());
+    expect(line.queryCount).toBe(3);
+    expect(line.sdkMessageCount).toBe(47);
     expect(mockLog).toHaveBeenCalledWith('Wrote session metrics');
+  });
+
+  it('defaults sdkMessageCount to 0 when not provided', () => {
+    writeSessionMetrics({
+      sessionDuration: 1000,
+      messageCount: 1,
+      hadError: false,
+      isScheduledTask: false,
+    }, mockLog);
+
+    const appendCall = mockedFs.appendFileSync.mock.calls[0];
+    const line = JSON.parse((appendCall![1] as string).trim());
+    expect(line.sdkMessageCount).toBe(0);
   });
 
   it('appends to existing file (not overwrite)', () => {
@@ -880,5 +899,102 @@ describe('updateConversationIndex', () => {
     const undatedEntry = parsed.entries.find((e: { file: string }) => e.file === 'undated-conversation.md');
     expect(datedEntry.date).toBe('2026-02-20');
     expect(undatedEntry.date).toBe('2026-03-01');
+  });
+});
+
+describe('extractTopicSummary', () => {
+  it('extracts heading as title with body', () => {
+    const content = '# Session: 2026-02-27\n\nDiscussed API design for the new endpoints.';
+    const result = extractTopicSummary(content);
+    expect(result).toBe('Session: 2026-02-27 — Discussed API design for the new endpoints.');
+  });
+
+  it('extracts ## heading as title', () => {
+    const content = '## Bug Fix Discussion\n\nFixed the login timeout.';
+    const result = extractTopicSummary(content);
+    expect(result).toBe('Bug Fix Discussion — Fixed the login timeout.');
+  });
+
+  it('falls back to raw truncation when no heading', () => {
+    const content = 'Just some text without any headings at all.';
+    const result = extractTopicSummary(content);
+    expect(result).toBe('Just some text without any headings at all.');
+  });
+
+  it('returns only title when no body follows', () => {
+    const content = '# Session: 2026-02-27\n\n';
+    const result = extractTopicSummary(content);
+    expect(result).toBe('Session: 2026-02-27');
+  });
+
+  it('skips blank lines and sub-headings in body', () => {
+    const content = '# Main Topic\n\n## Sub-heading\nActual body text here.';
+    const result = extractTopicSummary(content);
+    expect(result).toBe('Main Topic — Actual body text here.');
+  });
+
+  it('truncates long body to 200 chars total', () => {
+    const title = 'Short Title';
+    const body = 'x'.repeat(300);
+    const content = `# ${title}\n\n${body}`;
+    const result = extractTopicSummary(content);
+    expect(result.length).toBeLessThanOrEqual(200);
+  });
+});
+
+describe('validatePersonalityFormat', () => {
+  const mockLog = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('logs warning for confidence out of range', () => {
+    const content = '- User is verbose | confidence: 1.5 | reinforced: 2026-02-27';
+    validatePersonalityFormat(content, mockLog);
+    expect(mockLog).toHaveBeenCalledWith(
+      expect.stringContaining('confidence value out of range'),
+    );
+  });
+
+  it('accepts valid confidence values', () => {
+    const content = '- concise | confidence: 0.8 | reinforced: 2026-02-27';
+    validatePersonalityFormat(content, mockLog);
+    expect(mockLog).not.toHaveBeenCalled();
+  });
+
+  it('logs warning for future dates', () => {
+    const content = '- trait | confidence: 0.5 | reinforced: 2099-01-01';
+    validatePersonalityFormat(content, mockLog);
+    expect(mockLog).toHaveBeenCalledWith(
+      expect.stringContaining('future date found (2099-01-01)'),
+    );
+  });
+
+  it('accepts past and today dates', () => {
+    const today = new Date().toISOString().split('T')[0];
+    const content = `- trait | confidence: 0.5 | reinforced: ${today}`;
+    validatePersonalityFormat(content, mockLog);
+    expect(mockLog).not.toHaveBeenCalled();
+  });
+
+  it('logs warning for traits without goals section', () => {
+    const content = '## Personality Traits\n- concise | confidence: 0.8';
+    validatePersonalityFormat(content, mockLog);
+    expect(mockLog).toHaveBeenCalledWith(
+      expect.stringContaining('missing Growth Goals section'),
+    );
+  });
+
+  it('passes when both sections present', () => {
+    const content = '## Personality Traits\n- trait\n## Growth Goals\n- goal';
+    validatePersonalityFormat(content, mockLog);
+    expect(mockLog).not.toHaveBeenCalled();
+  });
+
+  it('passes for flat-text format (no structured sections)', () => {
+    const content = 'User prefers pirate speak. Likes short answers.';
+    validatePersonalityFormat(content, mockLog);
+    expect(mockLog).not.toHaveBeenCalled();
   });
 });

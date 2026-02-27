@@ -52,7 +52,7 @@ export function createPendingReflectionHook(
       // (file deleted between readdirSync and statSync).
       const pendingFiles: Array<{ file: string; mtime: number }> = [];
       for (const f of fs.readdirSync(pendingDir)) {
-        if (!f.endsWith('.jsonl')) continue;
+        if (!f.endsWith('.jsonl') && !f.endsWith('.json')) continue;
         try {
           const mtime = fs.statSync(path.join(pendingDir, f)).mtimeMs;
           pendingFiles.push({ file: f, mtime });
@@ -73,7 +73,7 @@ export function createPendingReflectionHook(
           log(
             `Failed to rotate pending file ${oldest.file}: ${err instanceof Error ? err.message : String(err)}`,
           );
-          break;
+          continue;
         }
       }
 
@@ -136,7 +136,7 @@ export function stageSessionEndSummary(
         fs.unlinkSync(path.join(pendingDir, oldest.file));
       } catch (err) {
         log(`Failed to rotate pending file ${oldest.file}: ${err instanceof Error ? err.message : String(err)}`);
-        break;
+        continue;
       }
     }
 
@@ -170,6 +170,7 @@ export function writeSessionMetrics(
     messageCount: number;
     hadError: boolean;
     isScheduledTask: boolean;
+    sdkMessageCount?: number;
   },
   log: (msg: string) => void,
 ): void {
@@ -181,7 +182,8 @@ export function writeSessionMetrics(
     const line = JSON.stringify({
       timestamp: new Date().toISOString(),
       sessionDuration: opts.sessionDuration,
-      messageCount: opts.messageCount,
+      queryCount: opts.messageCount,
+      sdkMessageCount: opts.sdkMessageCount ?? 0,
       hadError: opts.hadError,
       isScheduledTask: opts.isScheduledTask,
     });
@@ -266,6 +268,40 @@ export function loadCrossGroupInsights(
 const MAX_INDEX_ENTRIES = 500;
 
 /**
+ * Extract a topic summary from conversation archive content.
+ * Uses the first markdown heading as a title, then appends cleaned
+ * body text up to 200 chars total. Falls back to raw truncation.
+ */
+export function extractTopicSummary(content: string): string {
+  const lines = content.split('\n');
+  let title = '';
+  let bodyStart = 0;
+
+  // Find the first markdown heading (# or ##)
+  for (let i = 0; i < lines.length && i < 10; i++) {
+    const match = lines[i].match(/^#{1,2}\s+(.+)/);
+    if (match) {
+      title = match[1].trim();
+      bodyStart = i + 1;
+      break;
+    }
+  }
+
+  if (!title) {
+    // No heading found — fall back to raw truncation
+    return content.slice(0, 200).replace(/\n/g, ' ').trim();
+  }
+
+  // Grab body text after the heading, skip blank lines
+  const bodyLines = lines.slice(bodyStart)
+    .map(l => l.trim())
+    .filter(l => l && !l.startsWith('#'));
+  const body = bodyLines.join(' ').slice(0, 200 - title.length - 3);
+
+  return body ? `${title} — ${body}` : title;
+}
+
+/**
  * Update conversations/index.json with summaries of conversation files.
  * Called by the daily reflection task to keep the index current.
  * Creates the index if it doesn't exist, caps at MAX_INDEX_ENTRIES.
@@ -298,7 +334,7 @@ export function updateConversationIndex(
         entries.push({
           file,
           date,
-          summary: content.slice(0, 200).replace(/\n/g, ' ').trim(),
+          summary: extractTopicSummary(content),
         });
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -329,6 +365,39 @@ const GOALS_PREAMBLE = `# Current Growth Goals (self-identified areas for improv
 These are goals you set for yourself. Actively work toward them in conversations.`;
 
 /**
+ * Validate personality.md format and log warnings for issues.
+ * Checks: confidence values in range, no future dates, required sections present.
+ * Never rejects — warnings only, to surface data quality issues.
+ */
+export function validatePersonalityFormat(
+  content: string,
+  log: (msg: string) => void,
+): void {
+  // Check confidence values are in 0.0–1.0 range
+  const confidenceMatches = content.matchAll(/confidence:\s*([\d.]+)/gi);
+  for (const match of confidenceMatches) {
+    const val = parseFloat(match[1]);
+    if (isNaN(val) || val < 0 || val > 1) {
+      log(`Personality validation: confidence value out of range (${match[1]})`);
+    }
+  }
+
+  // Check for future dates (simple YYYY-MM-DD pattern)
+  const today = new Date().toISOString().split('T')[0];
+  const dateMatches = content.matchAll(/\b(\d{4}-\d{2}-\d{2})\b/g);
+  for (const match of dateMatches) {
+    if (match[1] > today) {
+      log(`Personality validation: future date found (${match[1]})`);
+    }
+  }
+
+  // Check required sections for structured format
+  if (content.includes('## Personality Traits') && !content.includes('## Growth Goals')) {
+    log('Personality validation: has Personality Traits but missing Growth Goals section');
+  }
+}
+
+/**
  * Load evolution/personality.md and wrap in safety preamble.
  * If the structured format includes a Growth Goals section, it gets
  * a separate, stronger preamble to make goals more actionable.
@@ -340,6 +409,7 @@ export function loadPersonality(
   const personalityPath = '/workspace/group/evolution/personality.md';
   try {
     const raw = fs.readFileSync(personalityPath, 'utf-8');
+    validatePersonalityFormat(raw, log);
     let capped = raw;
     if (raw.length > PERSONALITY_MAX_SIZE) {
       // Truncate at last newline before the cap to avoid mid-line cuts.

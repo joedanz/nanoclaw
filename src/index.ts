@@ -3,13 +3,12 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
-  FEEDBACK_NEGATIVE_PATTERN,
-  FEEDBACK_POSITIVE_PATTERN,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
   TRIGGER_PATTERN,
 } from './config.js';
+import { filterFeedbackMessages } from './feedback.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import {
   ContainerOutput,
@@ -51,6 +50,7 @@ let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
+let lastAgentMessage: Record<string, string> = {};
 let messageLoopRunning = false;
 
 let whatsapp: WhatsAppChannel;
@@ -206,6 +206,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       if (text) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
+        lastAgentMessage[chatJid] = text.slice(0, 500);
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
@@ -327,35 +328,6 @@ async function runAgent(
   }
 }
 
-interface FeedbackEntry {
-  rating: 'positive' | 'negative';
-  timestamp: string;
-  from: string;
-  contextSummary: string;
-}
-
-/** Write a feedback signal to the group's evolution/feedback/ directory. */
-function writeFeedback(groupFolder: string, entry: FeedbackEntry): void {
-  try {
-    const groupDir = resolveGroupFolderPath(groupFolder);
-    const feedbackDir = path.join(groupDir, 'evolution', 'feedback');
-    fs.mkdirSync(feedbackDir, { recursive: true });
-
-    const suffix = Math.random().toString(36).slice(2, 8);
-    const filename = `${Date.now()}-${suffix}.json`;
-    fs.writeFileSync(
-      path.join(feedbackDir, filename),
-      JSON.stringify(entry, null, 2),
-    );
-    logger.info(
-      { groupFolder, rating: entry.rating },
-      'Recorded user feedback',
-    );
-  } catch (err) {
-    logger.error({ groupFolder, err }, 'Failed to write feedback file');
-  }
-}
-
 async function startMessageLoop(): Promise<void> {
   if (messageLoopRunning) {
     logger.debug('Message loop already running, skipping duplicate start');
@@ -396,24 +368,10 @@ async function startMessageLoop(): Promise<void> {
           const group = registeredGroups[chatJid];
           if (!group) continue;
 
-          // Intercept feedback commands (!good, !bad, etc.)
-          // These are written to evolution/feedback/ and never forwarded to the agent.
-          const normalMessages = groupMessages.filter((m) => {
-            const content = m.content.trim();
-            const isPositive = FEEDBACK_POSITIVE_PATTERN.test(content);
-            const isNegative = FEEDBACK_NEGATIVE_PATTERN.test(content);
-            if (!isPositive && !isNegative) return true;
-
-            writeFeedback(group.folder, {
-              rating: isPositive ? 'positive' : 'negative',
-              timestamp: new Date().toISOString(),
-              from: m.sender_name || 'unknown',
-              contextSummary: lastAgentTimestamp[chatJid]
-                ? `Last agent response at ${lastAgentTimestamp[chatJid]}`
-                : 'No prior agent response in this session',
-            });
-            return false;
-          });
+          // Intercept feedback commands (!good, !bad) — written to evolution/feedback/
+          const normalMessages = filterFeedbackMessages(
+            groupMessages, group.folder, chatJid, lastAgentTimestamp, lastAgentMessage,
+          );
           if (normalMessages.length === 0) continue;
 
           const channel = findChannel(channels, chatJid);
