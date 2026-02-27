@@ -362,8 +362,7 @@ describe('agent-runner version-based sync', () => {
   it('skips sync when .base-version matches current version', async () => {
     mockExistsPaths({});
     mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
-      if (String(p).includes('.base-version'))
-        return '2026-02-27\n';
+      if (String(p).includes('.base-version')) return '2026-02-27\n';
       return '';
     }) as typeof fs.readFileSync);
 

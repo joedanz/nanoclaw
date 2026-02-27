@@ -160,13 +160,17 @@ function pruneOrphanedSkills(
     try {
       const st = fs.lstatSync(dirPath);
       if (!st.isDirectory() || st.isSymbolicLink()) continue;
-    } catch { continue; }
+    } catch {
+      continue;
+    }
 
     const skillMdPath = path.join(dirPath, 'SKILL.md');
     try {
       const st = fs.lstatSync(skillMdPath);
       if (!st.isFile() || st.isSymbolicLink()) continue;
-    } catch { continue; }
+    } catch {
+      continue;
+    }
 
     try {
       fs.rmSync(dirPath, { recursive: true, force: true });

@@ -224,7 +224,9 @@ function buildVolumeMounts(
       const srcDir = path.join(skillsSrc, skillDir);
       try {
         if (!fs.lstatSync(srcDir).isDirectory()) continue;
-      } catch { continue; }
+      } catch {
+        continue;
+      }
       try {
         const dstDir = path.join(skillsDst, skillDir);
         fs.cpSync(srcDir, dstDir, { recursive: true });
