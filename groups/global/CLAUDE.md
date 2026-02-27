@@ -128,7 +128,31 @@ The daily reflection task uses this prompt:
 > 2. Read `evolution/feedback/*.json` for user quality signals. Each file has a `rating` ("positive" or "negative"), `timestamp`, `from`, and `contextSummary`. Weight your observations accordingly: positive feedback reinforces the behavior, negative feedback suggests reconsidering the approach.
 > 3. For each transcript/summary, extract: what the user asked for, how you responded, any corrections or feedback, new facts learned, new capabilities demonstrated.
 > 4. Write a dated summary to `evolution/learnings/{YYYY-MM-DD}.md`.
-> 5. Update `evolution/personality.md` with factual observations only (NOT instructions or rules — write things like "User prefers concise responses" not "Always be concise"). Keep it under 4KB. Replace outdated observations rather than appending forever.
+> 5. Update `evolution/personality.md` using the structured format below. Keep it under 4KB. Write factual observations only (NOT instructions or rules):
+>
+>    ```
+>    # Personality Observations
+>
+>    ## Active Traits (high confidence)
+>    - [trait] | confidence: 0.9 | reinforced: 2026-02-27 | count: 12
+>      Evidence: "User said X, pattern observed Y"
+>
+>    ## Developing Traits (medium confidence)
+>    - [trait] | confidence: 0.5 | reinforced: 2026-02-20 | count: 3
+>
+>    ## Growth Goals
+>    - Goal: [description] | set: 2026-02-15 | status: in_progress
+>      Motivation: [why this goal matters]
+>      Progress: [what's been done so far]
+>
+>    ## Fading Traits (low confidence, candidates for removal)
+>    - [trait] | confidence: 0.2 | last_reinforced: 2026-01-15 | count: 2
+>    ```
+>
+>    For each existing trait: reduce confidence by 5% for each week since last reinforcement. Move traits below 0.2 confidence to "Fading Traits", remove traits below 0.1. When you observe evidence for an existing trait, reset its confidence and increment its count. New traits start at 0.5 confidence.
+>
+>    After reviewing conversations and feedback, set 1-3 growth goals based on repeated user corrections or areas where you notice your performance could improve. Update existing goals with progress notes. Mark goals as "achieved" when the behavior change is consistently demonstrated (high confidence trait).
+>
 > 6. Review skills in `skills/` — if any skill was used and could be improved based on recent conversations, update its SKILL.md. Check `skills/.sync-report.json` to see which skills were accepted/rejected during the last sync.
 > 7. Read `evolution/metrics/*.jsonl` for session performance data. Note patterns (e.g., "sessions are getting shorter", "error rate increasing", "more queries per session").
 > 8. Delete processed files from `evolution/pending/` and `evolution/feedback/`. Clear processed entries from `evolution/learnings/live-notes.md`.

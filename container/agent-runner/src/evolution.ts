@@ -232,8 +232,13 @@ export function buildSystemPrompt(
     : undefined;
 }
 
+const GOALS_PREAMBLE = `# Current Growth Goals (self-identified areas for improvement)
+These are goals you set for yourself. Actively work toward them in conversations.`;
+
 /**
  * Load evolution/personality.md and wrap in safety preamble.
+ * If the structured format includes a Growth Goals section, it gets
+ * a separate, stronger preamble to make goals more actionable.
  * Returns undefined if file doesn't exist.
  */
 export function loadPersonality(
@@ -251,6 +256,15 @@ export function loadPersonality(
       const end = nl > 0 ? nl : PERSONALITY_MAX_SIZE;
       capped = raw.slice(0, end) + '\n...(truncated)';
     }
+
+    // Structured format: split at Growth Goals for stronger framing
+    const goalsIdx = capped.indexOf('## Growth Goals');
+    if (goalsIdx !== -1) {
+      const traitsSection = capped.slice(0, goalsIdx).trimEnd();
+      const goalsSection = capped.slice(goalsIdx);
+      return PERSONALITY_PREAMBLE + '\n' + traitsSection + '\n\n---\n\n' + GOALS_PREAMBLE + '\n' + goalsSection;
+    }
+
     return PERSONALITY_PREAMBLE + '\n' + capped;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;

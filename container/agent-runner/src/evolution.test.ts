@@ -373,6 +373,52 @@ describe('loadPersonality', () => {
       expect.stringContaining('Failed to read personality'),
     );
   });
+
+  it('splits Growth Goals section with stronger preamble', () => {
+    const structuredContent = `# Personality Observations
+
+## Active Traits (high confidence)
+- User prefers concise responses | confidence: 0.9 | reinforced: 2026-02-27 | count: 12
+
+## Growth Goals
+- Goal: Be more proactive | set: 2026-02-15 | status: in_progress
+  Motivation: User seems to want suggestions`;
+
+    mockedFs.readFileSync.mockReturnValue(structuredContent);
+
+    const result = loadPersonality(mockLog);
+    expect(result).toBeDefined();
+    // Should contain the personality preamble
+    expect(result).toContain('Evolved Personality');
+    // Should contain the goals preamble
+    expect(result).toContain('Current Growth Goals');
+    expect(result).toContain('Actively work toward them');
+    // Should still contain the actual goal content
+    expect(result).toContain('Be more proactive');
+    // Should contain the traits
+    expect(result).toContain('User prefers concise responses');
+  });
+
+  it('handles old flat-text format (backward compatible)', () => {
+    mockedFs.readFileSync.mockReturnValue('User prefers pirate speak. Likes short answers.');
+
+    const result = loadPersonality(mockLog);
+    expect(result).toBeDefined();
+    expect(result).toContain('Evolved Personality');
+    expect(result).toContain('User prefers pirate speak');
+    // Should NOT have the goals preamble (no Growth Goals section)
+    expect(result).not.toContain('Current Growth Goals');
+  });
+
+  it('truncation still works with structured format', () => {
+    // Create content with Growth Goals section that exceeds 8KB
+    const bigContent = '## Active Traits\n' + 'a'.repeat(5000) + '\n## Growth Goals\n' + 'b'.repeat(5000);
+    mockedFs.readFileSync.mockReturnValue(bigContent);
+
+    const result = loadPersonality(mockLog);
+    expect(result).toBeDefined();
+    expect(result).toContain('...(truncated)');
+  });
 });
 
 describe('buildSystemPrompt', () => {
