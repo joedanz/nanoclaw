@@ -160,6 +160,56 @@ export function stageSessionEndSummary(
 }
 
 /**
+ * Append a session metrics line to evolution/metrics/{date}.jsonl.
+ * One file per day in JSONL format for easy parsing by the reflection task.
+ * Deletes metric files older than MAX_METRICS_AGE_DAYS.
+ */
+export function writeSessionMetrics(
+  opts: {
+    sessionDuration: number;
+    messageCount: number;
+    hadError: boolean;
+    isScheduledTask: boolean;
+  },
+  log: (msg: string) => void,
+): void {
+  try {
+    const metricsDir = '/workspace/group/evolution/metrics';
+    fs.mkdirSync(metricsDir, { recursive: true });
+
+    const date = new Date().toISOString().split('T')[0];
+    const line = JSON.stringify({
+      timestamp: new Date().toISOString(),
+      sessionDuration: opts.sessionDuration,
+      messageCount: opts.messageCount,
+      hadError: opts.hadError,
+      isScheduledTask: opts.isScheduledTask,
+    });
+
+    fs.appendFileSync(path.join(metricsDir, `${date}.jsonl`), line + '\n');
+
+    // Rotate old metric files
+    try {
+      const cutoff = Date.now() - MAX_METRICS_AGE_DAYS * 24 * 60 * 60 * 1000;
+      for (const f of fs.readdirSync(metricsDir)) {
+        if (!f.endsWith('.jsonl')) continue;
+        const dateStr = f.replace('.jsonl', '');
+        const fileDate = new Date(dateStr).getTime();
+        if (!isNaN(fileDate) && fileDate < cutoff) {
+          fs.unlinkSync(path.join(metricsDir, f));
+        }
+      }
+    } catch (err) {
+      log(`Failed to rotate metric files: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    log('Wrote session metrics');
+  } catch (err) {
+    log(`Failed to write session metrics: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
  * Build the system prompt append string from optional global CLAUDE.md
  * and optional personality content. Returns the SDK systemPrompt object
  * or undefined if neither source has content.

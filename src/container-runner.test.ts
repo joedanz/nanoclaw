@@ -449,3 +449,163 @@ describe('agent-runner version-based sync', () => {
     );
   });
 });
+
+/**
+ * Tests for personality versioning (snapshotPersonality).
+ *
+ * Exercised indirectly through runContainerAgent → buildVolumeMounts → snapshotPersonality.
+ * We verify by checking which fs operations (readFileSync, writeFileSync, mkdirSync) were called
+ * with personality-related paths.
+ */
+describe('personality versioning', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.clearAllMocks();
+    mockedFs.existsSync.mockImplementation(() => false);
+    (mockedFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([]);
+    mockedFs.statSync.mockReturnValue({ isDirectory: () => true } as fs.Stats);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function runAndClose() {
+    const promise = runContainerAgent(testGroup, testInput, () => {});
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.stdout.push(
+      `${OUTPUT_START_MARKER}\n${JSON.stringify({ status: 'success', result: null })}\n${OUTPUT_END_MARKER}\n`,
+    );
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    return promise;
+  }
+
+  it('creates history snapshot when personality.md changes', async () => {
+    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('agent-runner-src')) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      return false;
+    });
+    mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
+      const s = String(p);
+      if (s.includes('.base-version')) return '2026-02-27\n';
+      if (s.includes('personality.md')) return 'User likes jokes';
+      if (s.includes('.personality-hash')) {
+        const err = new Error('ENOENT') as NodeJS.ErrnoException;
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return '';
+    }) as typeof fs.readFileSync);
+
+    await runAndClose();
+
+    // Should have written to evolution/history/
+    expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('evolution/history/'),
+      'User likes jokes',
+    );
+    // Should have written the hash file
+    expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('.personality-hash'),
+      expect.any(String),
+    );
+  });
+
+  it('no-op when personality.md has not changed (hash match)', async () => {
+    const crypto = await import('crypto');
+    const expectedHash = crypto.createHash('sha256').update('User likes jokes').digest('hex');
+
+    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('agent-runner-src')) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      return false;
+    });
+    mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
+      const s = String(p);
+      if (s.includes('.base-version')) return '2026-02-27\n';
+      if (s.includes('personality.md')) return 'User likes jokes';
+      if (s.includes('.personality-hash')) return expectedHash;
+      return '';
+    }) as typeof fs.readFileSync);
+
+    await runAndClose();
+
+    // Should NOT have written to evolution/history/
+    expect(mockedFs.writeFileSync).not.toHaveBeenCalledWith(
+      expect.stringContaining('evolution/history/'),
+      expect.any(String),
+    );
+  });
+
+  it('handles missing personality.md gracefully', async () => {
+    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('agent-runner-src')) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      return false;
+    });
+    mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
+      const s = String(p);
+      if (s.includes('.base-version')) return '2026-02-27\n';
+      if (s.includes('personality.md')) {
+        const err = new Error('ENOENT') as NodeJS.ErrnoException;
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return '';
+    }) as typeof fs.readFileSync);
+
+    // Should not throw
+    await runAndClose();
+
+    // Should NOT have written to evolution/history/
+    expect(mockedFs.writeFileSync).not.toHaveBeenCalledWith(
+      expect.stringContaining('evolution/history/'),
+      expect.any(String),
+    );
+  });
+
+  it('caps history at 30 files', async () => {
+    const historyFiles = Array.from({ length: 35 }, (_, i) =>
+      `2026-02-${String(i + 1).padStart(2, '0')}T00-00-00-000Z.md`,
+    );
+
+    const deletedHistoryFiles: string[] = [];
+
+    mockedFs.existsSync.mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('agent-runner-src')) return true;
+      if (s.endsWith(path.join('container', 'agent-runner', 'src'))) return true;
+      return false;
+    });
+    mockedFs.readFileSync.mockImplementation(((p: fs.PathOrFileDescriptor) => {
+      const s = String(p);
+      if (s.includes('.base-version')) return '2026-02-27\n';
+      if (s.includes('personality.md')) return 'New personality content';
+      if (s.includes('.personality-hash')) return 'old-hash';
+      return '';
+    }) as typeof fs.readFileSync);
+    (mockedFs.readdirSync as ReturnType<typeof vi.fn>).mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('evolution/history')) return historyFiles;
+      return [];
+    });
+    mockedFs.unlinkSync = vi.fn(((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('evolution/history/')) {
+        deletedHistoryFiles.push(s);
+      }
+    }) as typeof fs.unlinkSync) as typeof mockedFs.unlinkSync;
+
+    await runAndClose();
+
+    // Should have deleted at least 5 files (35 - 30) plus we add 1 new = need to be at 30
+    expect(deletedHistoryFiles.length).toBeGreaterThanOrEqual(5);
+  });
+});

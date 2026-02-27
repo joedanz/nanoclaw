@@ -215,7 +215,7 @@ Configure McpServers for the project.`;
     );
   });
 
-  it('does nothing when skills directory does not exist', () => {
+  it('writes only sync report when skills directory does not exist', () => {
     const skillsDst = path.join(TEST_DIR, 'dst-skills');
     fs.mkdirSync(skillsDst, { recursive: true });
     const groupDir = path.join(TEST_DIR, 'empty-group');
@@ -224,7 +224,9 @@ Configure McpServers for the project.`;
     // Should not throw
     syncAgentSkills(groupDir, skillsDst, new Set());
 
-    expect(fs.readdirSync(skillsDst)).toHaveLength(0);
+    // Only the sync report should exist
+    const entries = fs.readdirSync(skillsDst);
+    expect(entries).toEqual(['.sync-report.json']);
   });
 
   it('skips skill without SKILL.md', () => {
@@ -323,5 +325,71 @@ Configure McpServers for the project.`;
 
     // Should not be pruned (no SKILL.md = not an agent skill)
     expect(fs.existsSync(path.join(nonSkillDir, 'other.txt'))).toBe(true);
+  });
+
+  describe('sync report', () => {
+    it('writes report after successful sync with accepted skills', () => {
+      const { groupDir, skillsDst } = setupDirs();
+      writeSkill(path.join(groupDir, 'skills'), 'my-skill', VALID_SKILL);
+
+      syncAgentSkills(groupDir, skillsDst, new Set());
+
+      const reportPath = path.join(skillsDst, '.sync-report.json');
+      expect(fs.existsSync(reportPath)).toBe(true);
+      const report = JSON.parse(fs.readFileSync(reportPath, 'utf-8'));
+      expect(report.accepted).toEqual([{ name: 'my-skill', size: VALID_SKILL.length }]);
+      expect(report.rejected).toEqual([]);
+      expect(report.pruned).toEqual([]);
+      expect(report.timestamp).toBeDefined();
+    });
+
+    it('includes rejection reasons', () => {
+      const { groupDir, skillsSrc, skillsDst } = setupDirs();
+      // Big skill (exceeds size limit)
+      writeSkill(skillsSrc, 'big-skill', '---\nname: big\n---\n' + 'x'.repeat(11_000));
+      // Dangerous skill
+      writeSkill(skillsSrc, 'evil-skill', '---\nname: evil\n---\nbypassPermissions');
+
+      syncAgentSkills(groupDir, skillsDst, new Set());
+
+      const report = JSON.parse(
+        fs.readFileSync(path.join(skillsDst, '.sync-report.json'), 'utf-8'),
+      );
+      expect(report.rejected.length).toBe(2);
+      expect(report.rejected.find((r: { name: string }) => r.name === 'big-skill').reason).toContain('byte limit');
+      expect(report.rejected.find((r: { name: string }) => r.name === 'evil-skill').reason).toContain('dangerous');
+    });
+
+    it('writes report even when no skills exist', () => {
+      const skillsDst = path.join(TEST_DIR, 'dst-skills');
+      fs.mkdirSync(skillsDst, { recursive: true });
+      const groupDir = path.join(TEST_DIR, 'empty-group');
+      fs.mkdirSync(groupDir, { recursive: true });
+
+      syncAgentSkills(groupDir, skillsDst, new Set());
+
+      const report = JSON.parse(
+        fs.readFileSync(path.join(skillsDst, '.sync-report.json'), 'utf-8'),
+      );
+      expect(report.accepted).toEqual([]);
+      expect(report.rejected).toEqual([]);
+    });
+
+    it('includes pruned skills in report', () => {
+      const { groupDir, skillsSrc, skillsDst } = setupDirs();
+
+      // Sync a skill
+      writeSkill(skillsSrc, 'old-skill', VALID_SKILL);
+      syncAgentSkills(groupDir, skillsDst, new Set());
+
+      // Remove from source and re-sync
+      fs.rmSync(path.join(skillsSrc, 'old-skill'), { recursive: true, force: true });
+      syncAgentSkills(groupDir, skillsDst, new Set());
+
+      const report = JSON.parse(
+        fs.readFileSync(path.join(skillsDst, '.sync-report.json'), 'utf-8'),
+      );
+      expect(report.pruned).toContain('old-skill');
+    });
   });
 });

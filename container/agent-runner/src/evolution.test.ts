@@ -12,6 +12,7 @@ vi.mock('fs', async () => {
       existsSync: vi.fn(() => false),
       readFileSync: vi.fn(() => ''),
       writeFileSync: vi.fn(),
+      appendFileSync: vi.fn(),
       mkdirSync: vi.fn(),
       readdirSync: vi.fn(() => []),
       statSync: vi.fn(() => ({ mtimeMs: 0 })),
@@ -23,7 +24,7 @@ vi.mock('fs', async () => {
 const mockedFs = vi.mocked(fs);
 
 // Import after mocks are set up
-const { createPendingReflectionHook, loadPersonality, buildSystemPrompt, stageSessionEndSummary } =
+const { createPendingReflectionHook, loadPersonality, buildSystemPrompt, stageSessionEndSummary, writeSessionMetrics } =
   await import('./evolution.js');
 
 describe('createPendingReflectionHook', () => {
@@ -561,5 +562,95 @@ describe('stageSessionEndSummary', () => {
     );
     const parsed = JSON.parse(writeCall![1] as string);
     expect(parsed.firstPromptSnippet.length).toBe(500);
+  });
+});
+
+describe('writeSessionMetrics', () => {
+  const mockLog = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedFs.appendFileSync.mockImplementation(vi.fn());
+    mockedFs.mkdirSync.mockImplementation(vi.fn());
+    mockedFs.readdirSync.mockReturnValue([] as unknown as fs.Dirent[]);
+    mockedFs.unlinkSync.mockImplementation(vi.fn());
+  });
+
+  it('writes correct JSONL line', () => {
+    writeSessionMetrics({
+      sessionDuration: 5000,
+      messageCount: 3,
+      hadError: false,
+      isScheduledTask: false,
+    }, mockLog);
+
+    expect(mockedFs.mkdirSync).toHaveBeenCalledWith(
+      '/workspace/group/evolution/metrics',
+      { recursive: true },
+    );
+    expect(mockedFs.appendFileSync).toHaveBeenCalledWith(
+      expect.stringMatching(/\/workspace\/group\/evolution\/metrics\/\d{4}-\d{2}-\d{2}\.jsonl$/),
+      expect.stringContaining('"sessionDuration":5000'),
+    );
+    expect(mockLog).toHaveBeenCalledWith('Wrote session metrics');
+  });
+
+  it('appends to existing file (not overwrite)', () => {
+    // appendFileSync is used, not writeFileSync
+    writeSessionMetrics({
+      sessionDuration: 1000,
+      messageCount: 1,
+      hadError: false,
+      isScheduledTask: false,
+    }, mockLog);
+
+    expect(mockedFs.appendFileSync).toHaveBeenCalled();
+    // writeFileSync should NOT be called for the metrics file
+    const writeToMetrics = mockedFs.writeFileSync.mock.calls.find(call =>
+      String(call[0]).includes('metrics/'),
+    );
+    expect(writeToMetrics).toBeUndefined();
+  });
+
+  it('rotates old files (>30 days)', () => {
+    // Create a file from 60 days ago
+    const oldDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    mockedFs.readdirSync.mockReturnValue([
+      `${oldDate}.jsonl`,
+      `2099-01-01.jsonl`,
+    ] as unknown as fs.Dirent[]);
+
+    writeSessionMetrics({
+      sessionDuration: 1000,
+      messageCount: 1,
+      hadError: false,
+      isScheduledTask: false,
+    }, mockLog);
+
+    // Should have deleted the old file
+    expect(mockedFs.unlinkSync).toHaveBeenCalledWith(
+      expect.stringContaining(`${oldDate}.jsonl`),
+    );
+    // Should NOT have deleted the future file
+    expect(mockedFs.unlinkSync).not.toHaveBeenCalledWith(
+      expect.stringContaining('2099-01-01.jsonl'),
+    );
+  });
+
+  it('handles write errors gracefully', () => {
+    mockedFs.appendFileSync.mockImplementation(() => {
+      throw new Error('ENOSPC: no space left');
+    });
+
+    writeSessionMetrics({
+      sessionDuration: 1000,
+      messageCount: 1,
+      hadError: false,
+      isScheduledTask: false,
+    }, mockLog);
+
+    expect(mockLog).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to write session metrics'),
+    );
   });
 });

@@ -23,16 +23,37 @@ const DANGEROUS_PATTERNS = [
   'mcpservers',
 ];
 
+interface SyncReportEntry {
+  name: string;
+  size?: number;
+  reason?: string;
+}
+
+interface SyncReport {
+  timestamp: string;
+  accepted: SyncReportEntry[];
+  rejected: SyncReportEntry[];
+  pruned: string[];
+}
+
 export function syncAgentSkills(
   groupDir: string,
   skillsDst: string,
   builtInSkillNames: Set<string>,
   log: (msg: string) => void = (m) => console.error(`[agent-skill-sync] ${m}`),
 ): void {
+  const report: SyncReport = {
+    timestamp: new Date().toISOString(),
+    accepted: [],
+    rejected: [],
+    pruned: [],
+  };
+
   const agentSkillsSrc = path.join(groupDir, 'skills');
   if (!fs.existsSync(agentSkillsSrc)) {
     // Source gone — prune all agent-created skills from destination
-    pruneOrphanedSkills(skillsDst, new Set(), builtInSkillNames, log);
+    pruneOrphanedSkills(skillsDst, new Set(), builtInSkillNames, log, report);
+    writeSyncReport(skillsDst, report, log);
     return;
   }
 
@@ -46,7 +67,8 @@ export function syncAgentSkills(
   } catch (err) {
     log(`Failed to read agent skills source ${agentSkillsSrc}: ${errMsg(err)}`);
     // Fall through to prune with empty synced set
-    pruneOrphanedSkills(skillsDst, new Set(), builtInSkillNames, log);
+    pruneOrphanedSkills(skillsDst, new Set(), builtInSkillNames, log, report);
+    writeSyncReport(skillsDst, report, log);
     return;
   }
 
@@ -79,18 +101,21 @@ export function syncAgentSkills(
       content = fs.readFileSync(skillMdPath, 'utf-8');
     } catch (err) {
       log(`Skipping skill ${skillDir}: read failed: ${errMsg(err)}`);
+      report.rejected.push({ name: skillDir, reason: `read failed: ${errMsg(err)}` });
       continue;
     }
 
     // Validate
     if (!content.startsWith('---')) {
       log(`Skipping skill ${skillDir}: missing frontmatter`);
+      report.rejected.push({ name: skillDir, reason: 'missing frontmatter' });
       continue;
     }
     if (content.length > MAX_SKILL_SIZE) {
       log(
         `Skipping skill ${skillDir}: exceeds ${MAX_SKILL_SIZE} byte limit (${content.length} bytes)`,
       );
+      report.rejected.push({ name: skillDir, size: content.length, reason: `exceeds ${MAX_SKILL_SIZE} byte limit` });
       continue;
     }
     // Case-insensitive check to prevent bypass via mixed casing
@@ -99,6 +124,7 @@ export function syncAgentSkills(
       .toLowerCase();
     if (DANGEROUS_PATTERNS.some((p) => contentLower.includes(p))) {
       log(`Skipping skill ${skillDir}: contains dangerous pattern`);
+      report.rejected.push({ name: skillDir, reason: 'contains dangerous pattern' });
       continue;
     }
 
@@ -109,6 +135,7 @@ export function syncAgentSkills(
       log(
         `Skipping skill ${skillDir}: cap exceeded (total ${totalSize + content.length} bytes, count ${count + 1})`,
       );
+      report.rejected.push({ name: skillDir, size: content.length, reason: 'cap exceeded' });
       break;
     }
     totalSize += content.length;
@@ -121,14 +148,33 @@ export function syncAgentSkills(
       fs.mkdirSync(dstDir, { recursive: true });
       fs.writeFileSync(path.join(dstDir, 'SKILL.md'), content);
       syncedSkills.add(skillDir);
+      report.accepted.push({ name: skillDir, size: content.length });
     } catch (err) {
       log(`Failed to write skill ${skillDir}: ${errMsg(err)}`);
+      report.rejected.push({ name: skillDir, reason: `write failed: ${errMsg(err)}` });
       continue;
     }
   }
 
   // Prune agent-created skills that no longer exist in source
-  pruneOrphanedSkills(skillsDst, syncedSkills, builtInSkillNames, log);
+  pruneOrphanedSkills(skillsDst, syncedSkills, builtInSkillNames, log, report);
+  writeSyncReport(skillsDst, report, log);
+}
+
+function writeSyncReport(
+  skillsDst: string,
+  report: SyncReport,
+  log: (msg: string) => void,
+): void {
+  try {
+    fs.mkdirSync(skillsDst, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillsDst, '.sync-report.json'),
+      JSON.stringify(report, null, 2),
+    );
+  } catch (err) {
+    log(`Failed to write sync report: ${errMsg(err)}`);
+  }
 }
 
 /**
@@ -140,6 +186,7 @@ function pruneOrphanedSkills(
   syncedSkills: Set<string>,
   builtInSkillNames: Set<string>,
   log?: (msg: string) => void,
+  report?: SyncReport,
 ): void {
   if (!fs.existsSync(skillsDst)) return;
 
@@ -175,6 +222,7 @@ function pruneOrphanedSkills(
     try {
       fs.rmSync(dirPath, { recursive: true, force: true });
       log?.(`Pruned orphaned agent skill: ${dir}`);
+      report?.pruned.push(dir);
     } catch (err) {
       log?.(`Failed to prune skill ${dir}: ${errMsg(err)}`);
     }

@@ -3,6 +3,7 @@
  * Spawns agent execution in containers and handles IPC
  */
 import { ChildProcess, exec, spawn } from 'child_process';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -136,6 +137,71 @@ function syncAgentRunner(
   return false;
 }
 
+const MAX_PERSONALITY_HISTORY = 30;
+
+/**
+ * Snapshot personality.md into evolution/history/ when content changes.
+ * Runs on the host before container start for reliability.
+ * Uses SHA-256 hash to detect changes, caps history at 30 files.
+ */
+function snapshotPersonality(groupDir: string, groupFolder: string): void {
+  const personalityPath = path.join(groupDir, 'evolution', 'personality.md');
+
+  let content: string;
+  try {
+    content = fs.readFileSync(personalityPath, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    logger.warn(
+      { group: groupFolder, err },
+      'Failed to read personality.md for versioning',
+    );
+    return;
+  }
+
+  const hash = crypto.createHash('sha256').update(content).digest('hex');
+  const hashFile = path.join(groupDir, 'evolution', '.personality-hash');
+
+  try {
+    const existingHash = fs.readFileSync(hashFile, 'utf-8').trim();
+    if (existingHash === hash) return; // No change
+  } catch {
+    // Hash file missing — first snapshot
+  }
+
+  try {
+    const historyDir = path.join(groupDir, 'evolution', 'history');
+    fs.mkdirSync(historyDir, { recursive: true });
+
+    // Write snapshot with ISO date filename
+    const dateStr = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(historyDir, `${dateStr}.md`), content);
+
+    // Update hash
+    fs.writeFileSync(hashFile, hash);
+
+    // Cap at MAX_PERSONALITY_HISTORY files
+    const files = fs.readdirSync(historyDir)
+      .filter(f => f.endsWith('.md'))
+      .sort();
+    while (files.length > MAX_PERSONALITY_HISTORY) {
+      const oldest = files.shift()!;
+      try {
+        fs.unlinkSync(path.join(historyDir, oldest));
+      } catch {
+        break;
+      }
+    }
+
+    logger.debug({ group: groupFolder }, 'Personality snapshot created');
+  } catch (err) {
+    logger.warn(
+      { group: groupFolder, err },
+      'Failed to create personality snapshot',
+    );
+  }
+}
+
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
@@ -244,6 +310,9 @@ function buildVolumeMounts(
   syncAgentSkills(groupDir, skillsDst, builtInSkillNames, (msg) =>
     logger.warn({ group: group.folder }, msg),
   );
+
+  // Snapshot personality.md before container start (detects changes via hash)
+  snapshotPersonality(groupDir, group.folder);
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
