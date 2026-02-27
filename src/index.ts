@@ -3,6 +3,8 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  FEEDBACK_NEGATIVE_PATTERN,
+  FEEDBACK_POSITIVE_PATTERN,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
@@ -325,6 +327,38 @@ async function runAgent(
   }
 }
 
+interface FeedbackEntry {
+  rating: 'positive' | 'negative';
+  timestamp: string;
+  from: string;
+  contextSummary: string;
+}
+
+/** Write a feedback signal to the group's evolution/feedback/ directory. */
+function writeFeedback(groupFolder: string, entry: FeedbackEntry): void {
+  try {
+    const groupDir = resolveGroupFolderPath(groupFolder);
+    const feedbackDir = path.join(groupDir, 'evolution', 'feedback');
+    fs.mkdirSync(feedbackDir, { recursive: true });
+
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const filename = `${Date.now()}-${suffix}.json`;
+    fs.writeFileSync(
+      path.join(feedbackDir, filename),
+      JSON.stringify(entry, null, 2),
+    );
+    logger.info(
+      { groupFolder, rating: entry.rating },
+      'Recorded user feedback',
+    );
+  } catch (err) {
+    logger.error(
+      { groupFolder, err },
+      'Failed to write feedback file',
+    );
+  }
+}
+
 async function startMessageLoop(): Promise<void> {
   if (messageLoopRunning) {
     logger.debug('Message loop already running, skipping duplicate start');
@@ -365,6 +399,26 @@ async function startMessageLoop(): Promise<void> {
           const group = registeredGroups[chatJid];
           if (!group) continue;
 
+          // Intercept feedback commands (!good, !bad, etc.)
+          // These are written to evolution/feedback/ and never forwarded to the agent.
+          const normalMessages = groupMessages.filter((m) => {
+            const content = m.content.trim();
+            const isPositive = FEEDBACK_POSITIVE_PATTERN.test(content);
+            const isNegative = FEEDBACK_NEGATIVE_PATTERN.test(content);
+            if (!isPositive && !isNegative) return true;
+
+            writeFeedback(group.folder, {
+              rating: isPositive ? 'positive' : 'negative',
+              timestamp: new Date().toISOString(),
+              from: m.sender_name || 'unknown',
+              contextSummary: lastAgentTimestamp[chatJid]
+                ? `Last agent response at ${lastAgentTimestamp[chatJid]}`
+                : 'No prior agent response in this session',
+            });
+            return false;
+          });
+          if (normalMessages.length === 0) continue;
+
           const channel = findChannel(channels, chatJid);
           if (!channel) {
             logger.warn({ chatJid }, 'No channel owns JID, skipping messages');
@@ -378,7 +432,7 @@ async function startMessageLoop(): Promise<void> {
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
           if (needsTrigger) {
-            const hasTrigger = groupMessages.some((m) =>
+            const hasTrigger = normalMessages.some((m) =>
               TRIGGER_PATTERN.test(m.content.trim()),
             );
             if (!hasTrigger) continue;
