@@ -1,6 +1,6 @@
 ---
 name: backup
-description: "Set up automated backups of NanoClaw data (messages, group memory, WhatsApp auth). Creates a backup script and schedules it via launchd/cron. Supports local, external drive, and cloud (rclone) destinations."
+description: "Set up automated backups of NanoClaw data (messages, group memory). Optionally includes credentials, session transcripts, and mount allowlist. Creates a backup script and schedules it via launchd/cron. Supports local, external drive, and cloud (rclone) destinations."
 ---
 
 # NanoClaw Backup
@@ -13,21 +13,22 @@ Creates `scripts/backup.sh` with the user's configuration baked in, schedules it
 
 ## What Gets Backed Up
 
+**Always included (irreplaceable core data):**
+
 | Data | Method | Why |
 |------|--------|-----|
 | `store/messages.db` | `sqlite3 .backup` | Safe online backup — handles WAL/locks correctly while NanoClaw runs |
 | `groups/*/` (excluding `logs/`) | `rsync -a --exclude='logs/'` | Per-group memory, CLAUDE.md, agent-created files |
-| `store/auth/` | `rsync -a` | WhatsApp auth credentials (avoids QR re-scan) |
-| `.env` | `cp` (chmod 600) | API keys and config |
 
 **Optional (user chooses in step 5):**
 
-| Data | Method | Why |
-|------|--------|-----|
-| `data/sessions/` | `rsync -a` | Per-group Claude conversation history (JSONL). Can be large. |
-| `~/.config/nanoclaw/mount-allowlist.json` | `cp` | Agent filesystem access rules. Avoids re-running `/setup` step 9. |
+| Data | Method | Risk / Note |
+|------|--------|-------------|
+| **Credentials** (`.env` + `store/auth/`) | `cp` + `rsync -a` (chmod 600) | **Security-sensitive.** API keys, OAuth tokens, WhatsApp device credentials. If backup compromised, attacker gains account access. Recreatable from provider dashboards / QR re-scan. |
+| **Session transcripts** (`data/sessions/`) | `rsync -a` | **Can be large** (100s of MB). Per-group Claude conversation history (JSONL). Not recreatable. |
+| **Mount allowlist** (`~/.config/nanoclaw/mount-allowlist.json`) | `cp` (chmod 600) | Small file. Agent filesystem access rules. Old backup may re-enable revoked paths. Avoids re-running `/setup` step 9. |
 
-**Not backed up:** `groups/*/logs/` (bulky, recreatable), `node_modules/`, `dist/`, `data/env/` (derived from `.env`).
+**Not backed up:** `groups/*/logs/` (bulky, recreatable), `node_modules/`, `dist/`, `data/env/` (derived from `.env`), `data/ipc/` (ephemeral).
 
 ## Flow
 
@@ -86,10 +87,11 @@ AskUserQuestion (multiSelect): Back up additional data?
 
 | Option | Description |
 |--------|-------------|
-| **Claude session transcripts** | `data/sessions/` — per-group conversation history (JSONL). Can be large. Not recreatable. |
-| **Mount allowlist** | `~/.config/nanoclaw/mount-allowlist.json` — agent filesystem access rules. Small file, avoids re-running `/setup` step 9. |
+| **Credentials** | `.env` + `store/auth/` — API keys, OAuth tokens, WhatsApp device credentials. ⚠ Security-sensitive: if a backup is compromised, an attacker gains account access. Both are recreatable (API keys from provider dashboards, WhatsApp auth from QR re-scan). |
+| **Session transcripts** | `data/sessions/` — per-group Claude conversation history (JSONL). Can be large (100s of MB). **Not recreatable** — your only record of agent conversations. |
+| **Mount allowlist** | `~/.config/nanoclaw/mount-allowlist.json` — agent filesystem access rules. Small file, avoids re-running `/setup` step 9. ⚠ An old backup may re-enable filesystem paths that were revoked. |
 
-Both are optional. If the user selects neither, skip this section in the generated script. Store selections as `BACKUP_SESSIONS=true/false` and `BACKUP_MOUNT_ALLOWLIST=true/false`.
+All three are optional. If none selected, only core data (messages DB + groups) is backed up. Store selections as `BACKUP_CREDENTIALS=true/false`, `BACKUP_SESSIONS=true/false`, and `BACKUP_MOUNT_ALLOWLIST=true/false`.
 
 ### 6. Generate `scripts/backup.sh`
 
@@ -111,6 +113,9 @@ Create `scripts/backup.sh` with the collected config. The script must:
 #   Destination: <BACKUP_DEST>
 #   Retention:   <RETENTION_DAYS> days
 #   Cloud:       <CLOUD_REMOTE or "none">
+#   Credentials: <yes or no>
+#   Sessions:    <yes or no>
+#   Allowlist:   <yes or no>
 #
 # RESTORE INSTRUCTIONS:
 #   1. Stop NanoClaw:
@@ -121,25 +126,26 @@ Create `scripts/backup.sh` with the collected config. The script must:
 #      cp <backup>/messages.db store/messages.db
 #   4. Restore groups:
 #      rsync -a <backup>/groups/ groups/
-#   5. Restore auth:
+#   5. (If backed up) Restore credentials:
 #      rsync -a <backup>/auth/ store/auth/
-#   6. Restore .env:
 #      cp <backup>/env .env
-#   7. (If backed up) Restore sessions:
+#      ⚠ Only restore credentials if you trust the backup source.
+#      A compromised backup grants account access via API keys and WhatsApp auth.
+#   6. (If backed up) Restore sessions:
 #      rsync -a <backup>/sessions/ data/sessions/
-#   8. (If backed up) Restore mount allowlist:
+#   7. (If backed up) Restore mount allowlist:
 #      cp <backup>/config/mount-allowlist.json ~/.config/nanoclaw/mount-allowlist.json
 #      chmod 600 ~/.config/nanoclaw/mount-allowlist.json
 #      ⚠ Review the restored allowlist before starting NanoClaw.
 #      An old backup may re-enable filesystem paths that were revoked.
 #      Compare: diff ~/.config/nanoclaw/mount-allowlist.json <backup>/config/mount-allowlist.json
-#   9. Start NanoClaw:
+#   8. Start NanoClaw:
 #      macOS:  launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
 #      Linux:  systemctl --user start nanoclaw
 #
 #   If restoring from cloud, first download the backup:
 #      rclone copy <CLOUD_REMOTE>/nanoclaw-<TIMESTAMP> /tmp/nanoclaw-restore
-#      Then follow steps 3-8 using /tmp/nanoclaw-restore as <backup>.
+#      Then follow steps 3-7 using /tmp/nanoclaw-restore as <backup>.
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 umask 077
@@ -148,6 +154,7 @@ NANOCLAW_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BACKUP_DEST="<user-chosen-path>"
 RETENTION_DAYS=<N>
 CLOUD_REMOTE="<remote:path or empty>"
+BACKUP_CREDENTIALS=<true or false>
 BACKUP_SESSIONS=<true or false>
 BACKUP_MOUNT_ALLOWLIST=<true or false>
 LOG_FILE="${NANOCLAW_DIR}/logs/backup.log"
@@ -204,26 +211,26 @@ log "Database integrity: ok"
 log "Backing up groups..."
 rsync -a --exclude='logs/' "${NANOCLAW_DIR}/groups/" "${BACKUP_DIR}/groups/"
 
-# 3. Backup WhatsApp auth
-if [ -d "${NANOCLAW_DIR}/store/auth" ]; then
-  log "Backing up WhatsApp auth..."
-  rsync -a "${NANOCLAW_DIR}/store/auth/" "${BACKUP_DIR}/auth/"
+# 3. Backup credentials (if enabled)
+if [ "$BACKUP_CREDENTIALS" = "true" ]; then
+  if [ -d "${NANOCLAW_DIR}/store/auth" ]; then
+    log "Backing up WhatsApp auth..."
+    rsync -a "${NANOCLAW_DIR}/store/auth/" "${BACKUP_DIR}/auth/"
+  fi
+  if [ -f "${NANOCLAW_DIR}/.env" ]; then
+    log "Backing up .env..."
+    cp "${NANOCLAW_DIR}/.env" "${BACKUP_DIR}/env"
+    chmod 600 "${BACKUP_DIR}/env"
+  fi
 fi
 
-# 4. Backup .env
-if [ -f "${NANOCLAW_DIR}/.env" ]; then
-  log "Backing up .env..."
-  cp "${NANOCLAW_DIR}/.env" "${BACKUP_DIR}/env"
-  chmod 600 "${BACKUP_DIR}/env"
-fi
-
-# 5. Backup Claude session transcripts (if enabled)
+# 4. Backup Claude session transcripts (if enabled)
 if [ "$BACKUP_SESSIONS" = "true" ] && [ -d "${NANOCLAW_DIR}/data/sessions" ]; then
   log "Backing up session transcripts..."
   rsync -a "${NANOCLAW_DIR}/data/sessions/" "${BACKUP_DIR}/sessions/"
 fi
 
-# 6. Backup mount allowlist (if enabled)
+# 5. Backup mount allowlist (if enabled)
 if [ "$BACKUP_MOUNT_ALLOWLIST" = "true" ]; then
   ALLOWLIST="${HOME}/.config/nanoclaw/mount-allowlist.json"
   if [ -f "$ALLOWLIST" ]; then
@@ -233,18 +240,18 @@ if [ "$BACKUP_MOUNT_ALLOWLIST" = "true" ]; then
   fi
 fi
 
-# 7. Cloud sync (if configured)
+# 6. Cloud sync (if configured)
 if [ -n "$CLOUD_REMOTE" ]; then
   log "Syncing to cloud: ${CLOUD_REMOTE}"
   rclone copy "${BACKUP_DIR}" "${CLOUD_REMOTE}/nanoclaw-${TIMESTAMP}" --log-level INFO
   log "Cloud sync complete"
 fi
 
-# 8. Retention cleanup (local)
+# 7. Retention cleanup (local)
 log "Cleaning local backups older than ${RETENTION_DAYS} days..."
 find "${BACKUP_DEST}" -maxdepth 1 -name "nanoclaw-*" -type d -mtime +${RETENTION_DAYS} -exec rm -rf {} +
 
-# 9. Retention cleanup (cloud, if configured)
+# 8. Retention cleanup (cloud, if configured)
 if [ -n "$CLOUD_REMOTE" ]; then
   log "Cleaning cloud backups older than ${RETENTION_DAYS} days..."
   rclone delete "${CLOUD_REMOTE}" --min-age "${RETENTION_DAYS}d" --log-level INFO 2>&1 | tee -a "$LOG_FILE" || true
@@ -257,7 +264,7 @@ log "Backup complete: ${BACKUP_DIR}"
 - Replace all placeholder values (`<user-chosen-path>`, `<N>`, `<remote:path or empty>`, `<true or false>`) with the actual user config.
 - If `CLOUD_REMOTE` is empty (no cloud), replace the cloud sync block with a comment noting it's disabled.
 - If destination is **not** an external drive, remove the mount-check block at the top.
-- If `BACKUP_SESSIONS` is false, remove the sessions backup block. Same for `BACKUP_MOUNT_ALLOWLIST`.
+- If `BACKUP_CREDENTIALS` is false, remove the credentials backup block (auth + .env). Same for `BACKUP_SESSIONS` and `BACKUP_MOUNT_ALLOWLIST`.
 - The script uses `mkdir`-based locking (not `flock`) because `flock` is not available on macOS.
 
 After writing the file:
