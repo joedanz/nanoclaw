@@ -124,6 +124,8 @@ Create `scripts/backup.sh` with the collected config. The script must:
 #   2. Pick a backup:  ls <BACKUP_DEST>/nanoclaw-*
 #   3. Restore database:
 #      cp <backup>/messages.db store/messages.db
+#      ⚠ This replaces your current database. Messages received after
+#      this backup's timestamp will be lost.
 #   4. Restore groups:
 #      rsync -a <backup>/groups/ groups/
 #   5. (If backed up) Restore credentials:
@@ -131,21 +133,24 @@ Create `scripts/backup.sh` with the collected config. The script must:
 #      cp <backup>/env .env
 #      ⚠ Only restore credentials if you trust the backup source.
 #      A compromised backup grants account access via API keys and WhatsApp auth.
+#      After restoring, rotate your API keys in provider dashboards
+#      to invalidate any copies an attacker may have captured.
 #   6. (If backed up) Restore sessions:
 #      rsync -a <backup>/sessions/ data/sessions/
 #   7. (If backed up) Restore mount allowlist:
+#      ⚠ Review the backup before restoring — an old backup may
+#      re-enable filesystem paths that were revoked.
+#      Compare: diff ~/.config/nanoclaw/mount-allowlist.json <backup>/config/mount-allowlist.json
+#      mkdir -p ~/.config/nanoclaw
 #      cp <backup>/config/mount-allowlist.json ~/.config/nanoclaw/mount-allowlist.json
 #      chmod 600 ~/.config/nanoclaw/mount-allowlist.json
-#      ⚠ Review the restored allowlist before starting NanoClaw.
-#      An old backup may re-enable filesystem paths that were revoked.
-#      Compare: diff ~/.config/nanoclaw/mount-allowlist.json <backup>/config/mount-allowlist.json
 #   8. Start NanoClaw:
 #      macOS:  launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
 #      Linux:  systemctl --user start nanoclaw
 #
 #   If restoring from cloud, first download the backup:
-#      rclone copy <CLOUD_REMOTE>/nanoclaw-<TIMESTAMP> /tmp/nanoclaw-restore
-#      Then follow steps 3-7 using /tmp/nanoclaw-restore as <backup>.
+#      rclone copy <CLOUD_REMOTE>/nanoclaw-<TIMESTAMP> ~/nanoclaw-restore-tmp
+#      Then follow steps 3-8 using ~/nanoclaw-restore-tmp as <backup>.
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 umask 077
@@ -159,22 +164,31 @@ BACKUP_SESSIONS=<true or false>
 BACKUP_MOUNT_ALLOWLIST=<true or false>
 LOG_FILE="${NANOCLAW_DIR}/logs/backup.log"
 
+mkdir -p "$(dirname "$LOG_FILE")"
+
 # For external drives: check destination is mounted before proceeding
 # (Only include this block if destination is an external/mounted drive)
 if [ ! -d "$BACKUP_DEST" ]; then
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Backup destination not found: ${BACKUP_DEST}" | tee -a "$LOG_FILE" 2>/dev/null
-  echo "Is the external drive mounted?"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Backup destination not found: ${BACKUP_DEST}" | tee -a "$LOG_FILE"
+  echo "Is the external drive mounted?" | tee -a "$LOG_FILE"
   exit 1
 fi
 
 # Prevent concurrent backup runs (mkdir is atomic and portable across macOS/Linux)
 LOCKDIR="${NANOCLAW_DIR}/.backup.lock"
+LOCK_ACQUIRED=false
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
-  echo "Another backup is running. Exiting."
-  exit 0
+  # Check if the lock is stale (older than 6 hours)
+  if find "$LOCKDIR" -maxdepth 0 -mmin +360 -print -quit 2>/dev/null | grep -q .; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Removing stale lock (>6 hours old)" | tee -a "$LOG_FILE"
+    rm -rf "$LOCKDIR"
+    mkdir "$LOCKDIR"
+  else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Another backup is running. Exiting." | tee -a "$LOG_FILE"
+    exit 1
+  fi
 fi
-
-mkdir -p "$(dirname "$LOG_FILE")"
+LOCK_ACQUIRED=true
 
 TIMESTAMP=$(date +%Y-%m-%dT%H-%M-%S)
 BACKUP_DIR="${BACKUP_DEST}/nanoclaw-${TIMESTAMP}"
@@ -188,7 +202,9 @@ cleanup() {
     log "Backup failed — cleaning up partial backup"
     rm -rf "${BACKUP_DIR}"
   fi
-  rm -rf "$LOCKDIR"
+  if [ "$LOCK_ACQUIRED" = "true" ]; then
+    rm -rf "$LOCKDIR"
+  fi
 }
 trap cleanup EXIT
 
@@ -215,19 +231,27 @@ rsync -a --exclude='logs/' "${NANOCLAW_DIR}/groups/" "${BACKUP_DIR}/groups/"
 if [ "$BACKUP_CREDENTIALS" = "true" ]; then
   if [ -d "${NANOCLAW_DIR}/store/auth" ]; then
     log "Backing up WhatsApp auth..."
-    rsync -a "${NANOCLAW_DIR}/store/auth/" "${BACKUP_DIR}/auth/"
+    rsync -a --chmod=F600,D700 "${NANOCLAW_DIR}/store/auth/" "${BACKUP_DIR}/auth/"
+  else
+    log "WARNING: store/auth/ not found — WhatsApp credentials not backed up"
   fi
   if [ -f "${NANOCLAW_DIR}/.env" ]; then
     log "Backing up .env..."
     cp "${NANOCLAW_DIR}/.env" "${BACKUP_DIR}/env"
     chmod 600 "${BACKUP_DIR}/env"
+  else
+    log "WARNING: .env not found — environment credentials not backed up"
   fi
 fi
 
 # 4. Backup Claude session transcripts (if enabled)
-if [ "$BACKUP_SESSIONS" = "true" ] && [ -d "${NANOCLAW_DIR}/data/sessions" ]; then
-  log "Backing up session transcripts..."
-  rsync -a "${NANOCLAW_DIR}/data/sessions/" "${BACKUP_DIR}/sessions/"
+if [ "$BACKUP_SESSIONS" = "true" ]; then
+  if [ -d "${NANOCLAW_DIR}/data/sessions" ]; then
+    log "Backing up session transcripts..."
+    rsync -a "${NANOCLAW_DIR}/data/sessions/" "${BACKUP_DIR}/sessions/"
+  else
+    log "WARNING: data/sessions/ not found — session transcripts not backed up"
+  fi
 fi
 
 # 5. Backup mount allowlist (if enabled)
@@ -237,6 +261,9 @@ if [ "$BACKUP_MOUNT_ALLOWLIST" = "true" ]; then
     log "Backing up mount allowlist..."
     mkdir -p "${BACKUP_DIR}/config"
     cp "$ALLOWLIST" "${BACKUP_DIR}/config/mount-allowlist.json"
+    chmod 600 "${BACKUP_DIR}/config/mount-allowlist.json"
+  else
+    log "WARNING: mount-allowlist.json not found — allowlist not backed up"
   fi
 fi
 
@@ -247,14 +274,21 @@ if [ -n "$CLOUD_REMOTE" ]; then
   log "Cloud sync complete"
 fi
 
-# 7. Retention cleanup (local)
+# 7. Retention cleanup (local) — non-fatal
 log "Cleaning local backups older than ${RETENTION_DAYS} days..."
-find "${BACKUP_DEST}" -maxdepth 1 -name "nanoclaw-*" -type d -mtime +${RETENTION_DAYS} -exec rm -rf {} +
+find "${BACKUP_DEST}" -maxdepth 1 -name "nanoclaw-*" -type d -mtime +${RETENTION_DAYS} -exec rm -rf {} + || {
+  log "WARNING: Local retention cleanup failed — old backups may not be removed"
+}
 
-# 8. Retention cleanup (cloud, if configured)
+# 8. Retention cleanup (cloud, if configured) — non-fatal
 if [ -n "$CLOUD_REMOTE" ]; then
   log "Cleaning cloud backups older than ${RETENTION_DAYS} days..."
-  rclone delete "${CLOUD_REMOTE}" --min-age "${RETENTION_DAYS}d" --log-level INFO 2>&1 | tee -a "$LOG_FILE" || true
+  {
+    rclone lsf "${CLOUD_REMOTE}" --dirs-only --min-age "${RETENTION_DAYS}d" 2>/dev/null | grep '^nanoclaw-' | while read -r dir; do
+      log "Removing old cloud backup: ${dir}"
+      rclone purge "${CLOUD_REMOTE}/${dir}" --log-level INFO 2>&1 | tee -a "$LOG_FILE" || true
+    done
+  } || log "WARNING: Cloud retention cleanup failed — old backups may not be removed"
 fi
 
 log "Backup complete: ${BACKUP_DIR}"

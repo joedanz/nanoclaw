@@ -29,7 +29,7 @@ Single Node.js process that connects to WhatsApp, routes messages to Claude Agen
 | `/customize` | Adding channels, integrations, changing behavior |
 | `/debug` | Container issues, logs, troubleshooting |
 | `/update` | Pull upstream NanoClaw changes, merge with customizations, run migrations |
-| `/backup` | Set up automated backups of messages DB, group memory, and optionally credentials and sessions |
+| `/backup` | Set up automated backups of messages DB, group memory, and optionally credentials, sessions, and mount allowlist |
 | `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
 | `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
 
