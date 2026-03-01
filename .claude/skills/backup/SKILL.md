@@ -59,9 +59,9 @@ AskUserQuestion: How many days of backups to keep?
 
 | Option | Description |
 |--------|-------------|
-| **7 days** (Recommended) | Good balance of safety and disk usage |
-| **14 days** | More history, uses more space |
-| **30 days** | Maximum safety net |
+| **14 days** | Two weeks of daily restore points |
+| **30 days** (Recommended) | Full month of coverage; good default for small data |
+| **90 days** | Maximum safety net; catches slow-moving issues |
 
 ### 4. Ask Schedule
 
