@@ -124,30 +124,32 @@ export class TelegramChannel implements Channel {
     const launchPolling = (): Promise<void> => {
       return new Promise<void>((resolve) => {
         const bot = this.bot!;
-        bot.start({
-          onStart: (botInfo) => {
-            logger.info(
-              { username: botInfo.username, id: botInfo.id },
-              'Telegram bot connected',
-            );
-            console.log(`\n  Telegram bot: @${botInfo.username}`);
-            console.log(
-              `  Send /chatid to the bot to get a chat's registration ID\n`,
-            );
-            resolve();
-          },
-        }).catch((err: Error & { error_code?: number }) => {
-          if (err.error_code === 409) {
-            logger.warn('Telegram polling conflict (409), retrying in 3s...');
-            setTimeout(() => {
-              this.bot = new Bot(this.botToken);
-              this.registerHandlers();
-              launchPolling().then(resolve);
-            }, 3000);
-          } else {
-            logger.error({ err: err.message }, 'Telegram polling failed');
-          }
-        });
+        bot
+          .start({
+            onStart: (botInfo) => {
+              logger.info(
+                { username: botInfo.username, id: botInfo.id },
+                'Telegram bot connected',
+              );
+              console.log(`\n  Telegram bot: @${botInfo.username}`);
+              console.log(
+                `  Send /chatid to the bot to get a chat's registration ID\n`,
+              );
+              resolve();
+            },
+          })
+          .catch((err: Error & { error_code?: number }) => {
+            if (err.error_code === 409) {
+              logger.warn('Telegram polling conflict (409), retrying in 3s...');
+              setTimeout(() => {
+                this.bot = new Bot(this.botToken);
+                this.registerHandlers();
+                launchPolling().then(resolve);
+              }, 3000);
+            } else {
+              logger.error({ err: err.message }, 'Telegram polling failed');
+            }
+          });
       });
     };
 
@@ -290,7 +292,9 @@ export class TelegramChannel implements Channel {
 
     this.bot!.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
     this.bot!.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot!.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
+    this.bot!.on('message:voice', (ctx) =>
+      storeNonText(ctx, '[Voice message]'),
+    );
     this.bot!.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
     this.bot!.on('message:document', (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
