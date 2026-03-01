@@ -124,9 +124,20 @@ RETENTION_DAYS=<N>
 CLOUD_REMOTE="<remote:path or empty>"
 LOG_FILE="${NANOCLAW_DIR}/logs/backup.log"
 
-# Prevent concurrent backup runs
-exec 200>"${NANOCLAW_DIR}/.backup.lock"
-flock -n 200 || { echo "Another backup is running. Exiting."; exit 0; }
+# For external drives: check destination is mounted before proceeding
+# (Only include this block if destination is an external/mounted drive)
+if [ ! -d "$BACKUP_DEST" ]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Backup destination not found: ${BACKUP_DEST}" | tee -a "$LOG_FILE" 2>/dev/null
+  echo "Is the external drive mounted?"
+  exit 1
+fi
+
+# Prevent concurrent backup runs (mkdir is atomic and portable across macOS/Linux)
+LOCKDIR="${NANOCLAW_DIR}/.backup.lock"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  echo "Another backup is running. Exiting."
+  exit 0
+fi
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -135,8 +146,16 @@ BACKUP_DIR="${BACKUP_DEST}/nanoclaw-${TIMESTAMP}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 
-# Clean up partial backup on failure
-trap 'log "Backup failed — cleaning up partial backup"; rm -rf "${BACKUP_DIR}"' ERR
+# Clean up partial backup on failure, and always release lock
+cleanup() {
+  local exit_code=$?
+  if [ $exit_code -ne 0 ]; then
+    log "Backup failed — cleaning up partial backup"
+    rm -rf "${BACKUP_DIR}"
+  fi
+  rm -rf "$LOCKDIR"
+}
+trap cleanup EXIT
 
 log "Starting backup to ${BACKUP_DIR}"
 mkdir -p "${BACKUP_DIR}"
@@ -190,7 +209,11 @@ fi
 log "Backup complete: ${BACKUP_DIR}"
 ```
 
-**Important:** Replace all placeholder values (`<user-chosen-path>`, `<N>`, `<remote:path or empty>`) with the actual user config. If `CLOUD_REMOTE` is empty (no cloud), replace the cloud sync block with a comment noting it's disabled.
+**Important:**
+- Replace all placeholder values (`<user-chosen-path>`, `<N>`, `<remote:path or empty>`) with the actual user config.
+- If `CLOUD_REMOTE` is empty (no cloud), replace the cloud sync block with a comment noting it's disabled.
+- If destination is **not** an external drive, remove the mount-check block at the top.
+- The script uses `mkdir`-based locking (not `flock`) because `flock` is not available on macOS.
 
 After writing the file:
 
