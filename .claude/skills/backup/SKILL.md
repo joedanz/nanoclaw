@@ -20,7 +20,14 @@ Creates `scripts/backup.sh` with the user's configuration baked in, schedules it
 | `store/auth/` | `rsync -a` | WhatsApp auth credentials (avoids QR re-scan) |
 | `.env` | `cp` (chmod 600) | API keys and config |
 
-**Not backed up:** `groups/*/logs/` (bulky, recreatable), `node_modules/`, `dist/`, `data/sessions/`.
+**Optional (user chooses in step 5):**
+
+| Data | Method | Why |
+|------|--------|-----|
+| `data/sessions/` | `rsync -a` | Per-group Claude conversation history (JSONL). Can be large. |
+| `~/.config/nanoclaw/mount-allowlist.json` | `cp` | Agent filesystem access rules. Avoids re-running `/setup` step 9. |
+
+**Not backed up:** `groups/*/logs/` (bulky, recreatable), `node_modules/`, `dist/`, `data/env/` (derived from `.env`).
 
 ## Flow
 
@@ -73,7 +80,18 @@ AskUserQuestion: When should daily backups run?
 | **Midnight** | Start of day |
 | **6:00 AM** | Early morning |
 
-### 5. Generate `scripts/backup.sh`
+### 5. Ask About Optional Data
+
+AskUserQuestion (multiSelect): Back up additional data?
+
+| Option | Description |
+|--------|-------------|
+| **Claude session transcripts** | `data/sessions/` — per-group conversation history (JSONL). Can be large. Not recreatable. |
+| **Mount allowlist** | `~/.config/nanoclaw/mount-allowlist.json` — agent filesystem access rules. Small file, avoids re-running `/setup` step 9. |
+
+Both are optional. If the user selects neither, skip this section in the generated script. Store selections as `BACKUP_SESSIONS=true/false` and `BACKUP_MOUNT_ALLOWLIST=true/false`.
+
+### 6. Generate `scripts/backup.sh`
 
 Ensure the directory exists, then create the script:
 
@@ -107,13 +125,21 @@ Create `scripts/backup.sh` with the collected config. The script must:
 #      rsync -a <backup>/auth/ store/auth/
 #   6. Restore .env:
 #      cp <backup>/env .env
-#   7. Start NanoClaw:
+#   7. (If backed up) Restore sessions:
+#      rsync -a <backup>/sessions/ data/sessions/
+#   8. (If backed up) Restore mount allowlist:
+#      cp <backup>/config/mount-allowlist.json ~/.config/nanoclaw/mount-allowlist.json
+#      chmod 600 ~/.config/nanoclaw/mount-allowlist.json
+#      ⚠ Review the restored allowlist before starting NanoClaw.
+#      An old backup may re-enable filesystem paths that were revoked.
+#      Compare: diff ~/.config/nanoclaw/mount-allowlist.json <backup>/config/mount-allowlist.json
+#   9. Start NanoClaw:
 #      macOS:  launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
 #      Linux:  systemctl --user start nanoclaw
 #
 #   If restoring from cloud, first download the backup:
 #      rclone copy <CLOUD_REMOTE>/nanoclaw-<TIMESTAMP> /tmp/nanoclaw-restore
-#      Then follow steps 3-7 using /tmp/nanoclaw-restore as <backup>.
+#      Then follow steps 3-8 using /tmp/nanoclaw-restore as <backup>.
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 umask 077
@@ -122,6 +148,8 @@ NANOCLAW_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BACKUP_DEST="<user-chosen-path>"
 RETENTION_DAYS=<N>
 CLOUD_REMOTE="<remote:path or empty>"
+BACKUP_SESSIONS=<true or false>
+BACKUP_MOUNT_ALLOWLIST=<true or false>
 LOG_FILE="${NANOCLAW_DIR}/logs/backup.log"
 
 # For external drives: check destination is mounted before proceeding
@@ -189,18 +217,34 @@ if [ -f "${NANOCLAW_DIR}/.env" ]; then
   chmod 600 "${BACKUP_DIR}/env"
 fi
 
-# 5. Cloud sync (if configured)
+# 5. Backup Claude session transcripts (if enabled)
+if [ "$BACKUP_SESSIONS" = "true" ] && [ -d "${NANOCLAW_DIR}/data/sessions" ]; then
+  log "Backing up session transcripts..."
+  rsync -a "${NANOCLAW_DIR}/data/sessions/" "${BACKUP_DIR}/sessions/"
+fi
+
+# 6. Backup mount allowlist (if enabled)
+if [ "$BACKUP_MOUNT_ALLOWLIST" = "true" ]; then
+  ALLOWLIST="${HOME}/.config/nanoclaw/mount-allowlist.json"
+  if [ -f "$ALLOWLIST" ]; then
+    log "Backing up mount allowlist..."
+    mkdir -p "${BACKUP_DIR}/config"
+    cp "$ALLOWLIST" "${BACKUP_DIR}/config/mount-allowlist.json"
+  fi
+fi
+
+# 7. Cloud sync (if configured)
 if [ -n "$CLOUD_REMOTE" ]; then
   log "Syncing to cloud: ${CLOUD_REMOTE}"
   rclone copy "${BACKUP_DIR}" "${CLOUD_REMOTE}/nanoclaw-${TIMESTAMP}" --log-level INFO
   log "Cloud sync complete"
 fi
 
-# 6. Retention cleanup (local)
+# 8. Retention cleanup (local)
 log "Cleaning local backups older than ${RETENTION_DAYS} days..."
 find "${BACKUP_DEST}" -maxdepth 1 -name "nanoclaw-*" -type d -mtime +${RETENTION_DAYS} -exec rm -rf {} +
 
-# 7. Retention cleanup (cloud, if configured)
+# 9. Retention cleanup (cloud, if configured)
 if [ -n "$CLOUD_REMOTE" ]; then
   log "Cleaning cloud backups older than ${RETENTION_DAYS} days..."
   rclone delete "${CLOUD_REMOTE}" --min-age "${RETENTION_DAYS}d" --log-level INFO 2>&1 | tee -a "$LOG_FILE" || true
@@ -210,9 +254,10 @@ log "Backup complete: ${BACKUP_DIR}"
 ```
 
 **Important:**
-- Replace all placeholder values (`<user-chosen-path>`, `<N>`, `<remote:path or empty>`) with the actual user config.
+- Replace all placeholder values (`<user-chosen-path>`, `<N>`, `<remote:path or empty>`, `<true or false>`) with the actual user config.
 - If `CLOUD_REMOTE` is empty (no cloud), replace the cloud sync block with a comment noting it's disabled.
 - If destination is **not** an external drive, remove the mount-check block at the top.
+- If `BACKUP_SESSIONS` is false, remove the sessions backup block. Same for `BACKUP_MOUNT_ALLOWLIST`.
 - The script uses `mkdir`-based locking (not `flock`) because `flock` is not available on macOS.
 
 After writing the file:
@@ -221,7 +266,7 @@ After writing the file:
 chmod +x scripts/backup.sh
 ```
 
-### 6. Set Up Scheduling
+### 7. Set Up Scheduling
 
 Detect platform:
 
@@ -294,7 +339,7 @@ Add a crontab entry:
 
 Replace `<HOUR>` and `<NANOCLAW_DIR>` with actual values.
 
-### 7. Run First Backup
+### 8. Run First Backup
 
 Execute immediately to verify:
 
@@ -307,7 +352,7 @@ bash scripts/backup.sh
 - Permission denied on destination → check path and create parent dirs
 - rclone not configured → run `rclone config`
 
-### 8. Verify and Report
+### 9. Verify and Report
 
 After successful first backup, verify and report to the user:
 
