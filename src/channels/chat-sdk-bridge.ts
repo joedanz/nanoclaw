@@ -155,6 +155,23 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           } catch (err) {
             log.warn('Failed to download attachment', { type: att.type, err });
           }
+        } else if (att.url) {
+          // Some adapters expose only `url`, no fetchData. redirect:'error'
+          // is required — host can reach localhost services like OneCLI :10254.
+          const MAX_BYTES = 50 * 1024 * 1024;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 30_000);
+          try {
+            const response = await fetch(att.url, { redirect: 'error', signal: controller.signal });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const declared = Number(response.headers.get('content-length') ?? '0');
+            if (declared > MAX_BYTES) throw new Error(`attachment too large: ${declared} bytes`);
+            entry.data = Buffer.from(await response.arrayBuffer()).toString('base64');
+          } catch (err) {
+            log.warn('Failed to download attachment from URL', { type: att.type, url: att.url, err });
+          } finally {
+            clearTimeout(timer);
+          }
         }
         enriched.push(entry);
       }
